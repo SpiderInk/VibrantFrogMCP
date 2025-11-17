@@ -78,7 +78,7 @@ async def describe_image(image_path: str) -> str:
 Be specific and detailed to enable accurate searching."""
 
     response = ollama.chat(
-        model='llava:13b',
+        model='llava:7b',  # Using 7b for better performance (2-3x faster than 13b)
         messages=[{
             'role': 'user',
             'content': prompt,

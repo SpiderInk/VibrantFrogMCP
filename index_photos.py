@@ -55,7 +55,7 @@ async def describe_image(image_path: str) -> str:
 Be specific and detailed to enable accurate searching."""
 
     response = ollama.chat(
-        model='llava:13b',
+        model='llava:7b',  # Using 7b for better performance (2-3x faster than 13b)
         messages=[{
             'role': 'user',
             'content': prompt,
@@ -271,6 +271,9 @@ async def poll_and_index(limit=None, skip_indexed=True, include_cloud=True):
         if uuid:
             newly_indexed.append(uuid)
             indexed_uuids.add(uuid)
+            # Save cache immediately after each successful index
+            save_indexed_cache(indexed_uuids)
+            logger.info(f"💾 Cache saved - {len(indexed_uuids)} total indexed")
 
         photo_elapsed = time.time() - photo_start
         avg_time = (time.time() - session_start) / i
@@ -279,11 +282,6 @@ async def poll_and_index(limit=None, skip_indexed=True, include_cloud=True):
         logger.info(f"Photo {i} completed in {photo_elapsed:.2f}s")
         logger.info(f"Average time per photo: {avg_time:.2f}s")
         logger.info(f"Estimated time remaining: {estimated_remaining/60:.1f} minutes")
-
-        # Save progress periodically
-        if i % 10 == 0:
-            save_indexed_cache(indexed_uuids)
-            logger.info(f"Progress saved ({i} photos processed)")
 
     # Final save
     save_indexed_cache(indexed_uuids)
