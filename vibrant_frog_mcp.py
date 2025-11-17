@@ -8,11 +8,13 @@ from chromadb.utils import embedding_functions
 import ollama
 from PIL import Image
 from mcp.server import Server
-from mcp.types import Tool, TextContent
+from mcp.types import Tool, TextContent, ImageContent
 import mcp.server.stdio
 import sys
 import time
 import logging
+import base64
+from photo_retrieval import get_photo_by_uuid, get_photo_path_for_display, cleanup_temp_photo
 
 # Configure logging
 logging.basicConfig(
@@ -150,11 +152,76 @@ async def search_photos(query: str, n_results: int = 5) -> list:
     logger.info(f"Found {len(results['ids'][0])} results in {time.time()-start_time:.2f}s total")
 
     return [{
+        'uuid': results['ids'][0][i],
         'path': results['metadatas'][0][i]['path'],
         'filename': results['metadatas'][0][i]['filename'],
         'description': results['documents'][0][i],
         'distance': results['distances'][0][i]
     } for i in range(len(results['ids'][0]))]
+
+async def get_photo(uuid: str) -> dict:
+    """
+    Retrieve a photo from Apple Photos Library by UUID.
+    Returns image data as base64. Auto-cleans up temp exports.
+    """
+    start_time = time.time()
+    logger.info(f"Retrieving photo with UUID: {uuid}")
+
+    # Get photo metadata
+    photo = get_photo_by_uuid(uuid)
+    if not photo:
+        raise ValueError(f"Photo with UUID {uuid} not found in Apple Photos Library")
+
+    logger.info(f"Found photo: {photo.original_filename}")
+
+    # Get accessible path (exports from iCloud if needed)
+    path, needs_cleanup = get_photo_path_for_display(uuid, export_if_needed=True)
+
+    if not path:
+        raise ValueError(f"Could not access photo {uuid}. It may not be downloaded from iCloud.")
+
+    try:
+        # Read and encode image as base64
+        encode_start = time.time()
+        with open(path, 'rb') as f:
+            image_data = f.read()
+        image_base64 = base64.b64encode(image_data).decode('utf-8')
+        logger.info(f"Image encoded in {time.time()-encode_start:.2f}s")
+
+        # Determine MIME type
+        ext = Path(path).suffix.lower()
+        mime_types = {
+            '.jpg': 'image/jpeg',
+            '.jpeg': 'image/jpeg',
+            '.png': 'image/png',
+            '.gif': 'image/gif',
+            '.webp': 'image/webp',
+            '.heic': 'image/heic',
+            '.heif': 'image/heif'
+        }
+        mime_type = mime_types.get(ext, 'image/jpeg')
+
+        result = {
+            'uuid': uuid,
+            'filename': photo.original_filename,
+            'image_data': image_base64,
+            'mime_type': mime_type,
+            'width': photo.width,
+            'height': photo.height,
+            'was_exported': needs_cleanup
+        }
+
+        logger.info(f"Photo retrieved in {time.time()-start_time:.2f}s total")
+
+        return result
+
+    finally:
+        # Always clean up temp exports
+        if needs_cleanup:
+            cleanup_start = time.time()
+            cleanup_temp_photo(path)
+            logger.info(f"Temp export cleaned up in {time.time()-cleanup_start:.2f}s")
+
 
 async def index_directory(directory_path: str) -> list:
     """Recursively index all photos in a directory"""
@@ -236,6 +303,20 @@ async def list_tools() -> list[Tool]:
                 },
                 "required": ["directory_path"]
             }
+        ),
+        Tool(
+            name="get_photo",
+            description="Retrieve a photo by UUID from Apple Photos Library. Returns the image data. If photo is in iCloud, it will be exported temporarily and cleaned up automatically.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "uuid": {
+                        "type": "string",
+                        "description": "The photo UUID from search results"
+                    }
+                },
+                "required": ["uuid"]
+            }
         )
     ]
 
@@ -261,10 +342,13 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             output = f"Found {len(results)} photos:\n\n"
             for i, r in enumerate(results, 1):
                 output += f"{i}. {r['filename']}\n"
+                output += f"   UUID: {r['uuid']}\n"
                 output += f"   Path: {r['path']}\n"
                 output += f"   Description: {r['description']}\n"
                 output += f"   Relevance: {1 - r['distance']:.2f}\n\n"
-            
+
+            output += "\nTo view a photo, use the get_photo tool with the UUID."
+
             return [TextContent(type="text", text=output)]
         
         elif name == "index_directory":
@@ -273,7 +357,24 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 type="text",
                 text=f"Indexed {len(indexed)} photos from {arguments['directory_path']}"
             )]
-        
+
+        elif name == "get_photo":
+            result = await get_photo(arguments["uuid"])
+
+            # Return image as ImageContent for proper display in Claude Desktop
+            return [
+                ImageContent(
+                    type="image",
+                    data=result['image_data'],
+                    mimeType=result['mime_type']
+                ),
+                TextContent(
+                    type="text",
+                    text=f"Photo: {result['filename']}\nSize: {result['width']}x{result['height']}\n" +
+                         ("(Exported from iCloud and cleaned up)" if result['was_exported'] else "(Local file)")
+                )
+            ]
+
         else:
             raise ValueError(f"Unknown tool: {name}")
             
