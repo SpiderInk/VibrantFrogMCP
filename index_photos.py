@@ -229,8 +229,16 @@ async def index_photo_with_metadata(photo):
         traceback.print_exc()
         return None
 
-async def poll_and_index(limit=None, skip_indexed=True, include_cloud=True):
-    """Poll Apple Photos and index new photos"""
+async def poll_and_index(limit=None, skip_indexed=True, include_cloud=True, reverse_chronological=True):
+    """
+    Poll Apple Photos and index new photos
+
+    Args:
+        limit: Maximum number of photos to process in this batch
+        skip_indexed: Skip photos already in cache
+        include_cloud: Include iCloud photos (not just local)
+        reverse_chronological: Start with newest photos first (recommended)
+    """
     session_start = time.time()
 
     logger.info("📷 Opening Apple Photos Library...")
@@ -243,6 +251,20 @@ async def poll_and_index(limit=None, skip_indexed=True, include_cloud=True):
     # Get all photos (images only, not videos)
     photos = photosdb.photos(images=True, movies=False)
     logger.info(f"📊 Total photos in library: {len(photos)}")
+
+    # Sort by date (newest first if reverse_chronological)
+    if reverse_chronological:
+        # Sort by date descending (newest first), handling None dates
+        photos = sorted(photos, key=lambda p: p.date if p.date else datetime.min, reverse=True)
+        logger.info(f"📊 Sorted by date (newest first)")
+        if photos and photos[0].date:
+            logger.info(f"   Newest: {photos[0].date.strftime('%Y-%m-%d')} - {photos[0].original_filename}")
+        if photos and photos[-1].date:
+            logger.info(f"   Oldest: {photos[-1].date.strftime('%Y-%m-%d')} - {photos[-1].original_filename}")
+    else:
+        # Sort by date ascending (oldest first)
+        photos = sorted(photos, key=lambda p: p.date if p.date else datetime.max)
+        logger.info(f"📊 Sorted by date (oldest first)")
 
     # Filter cloud assets if requested
     if not include_cloud:
@@ -257,7 +279,7 @@ async def poll_and_index(limit=None, skip_indexed=True, include_cloud=True):
     # Apply limit if specified
     if limit:
         photos = photos[:limit]
-        logger.info(f"📊 Processing first {limit} photos")
+        logger.info(f"📊 Processing batch of {limit} photos (out of {len(photos)} remaining)")
 
     # Index photos
     newly_indexed = []
@@ -296,15 +318,71 @@ async def poll_and_index(limit=None, skip_indexed=True, include_cloud=True):
 
 if __name__ == "__main__":
     import sys
-    
-    # Usage: python index_photos.py [limit] [--local-only]
+
+    # Parse command-line arguments
     limit = None
     include_cloud = True
-    
+    reverse_chronological = True  # Default: newest first
+
+    # Show usage if --help
+    if '--help' in sys.argv or '-h' in sys.argv:
+        print("""
+VibrantFrog Photo Indexer
+==========================
+
+Index photos from Apple Photos Library with AI-powered descriptions.
+
+Usage:
+    python index_photos.py [LIMIT] [OPTIONS]
+
+Arguments:
+    LIMIT                   Number of photos to process (default: all unindexed)
+
+Options:
+    --local-only           Only index local photos (skip iCloud)
+    --oldest-first         Start with oldest photos instead of newest
+    --help, -h             Show this help message
+
+Examples:
+    # Index 500 newest photos
+    python index_photos.py 500
+
+    # Index 100 oldest unindexed photos
+    python index_photos.py 100 --oldest-first
+
+    # Index all local photos (no iCloud), newest first
+    python index_photos.py --local-only
+
+    # Index 1000 photos in batches of 500
+    python index_photos.py 500  # Run once
+    python index_photos.py 500  # Run again (continues from where it left off)
+
+Tips:
+    - Indexing is SLOW (~2-3 min per photo with llava:7b)
+    - Start with recent photos (default) to get useful results quickly
+    - Use batches of 500 for manageable sessions
+    - Can safely Ctrl+C anytime - progress is saved after each photo
+    - Re-run same command to continue where you left off
+
+Performance:
+    500 photos ≈ 16-25 hours
+    1000 photos ≈ 33-50 hours
+    5000 photos ≈ 7-10 days (run in batches!)
+        """)
+        sys.exit(0)
+
+    # Parse arguments
     for arg in sys.argv[1:]:
         if arg == '--local-only':
             include_cloud = False
+        elif arg == '--oldest-first':
+            reverse_chronological = False
         elif arg.isdigit():
             limit = int(arg)
-    
-    asyncio.run(poll_and_index(limit=limit, include_cloud=include_cloud))
+
+    # Run indexing
+    asyncio.run(poll_and_index(
+        limit=limit,
+        include_cloud=include_cloud,
+        reverse_chronological=reverse_chronological
+    ))
