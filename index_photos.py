@@ -14,6 +14,7 @@ import chromadb
 from chromadb.utils import embedding_functions
 import time
 import logging
+import caffeine
 
 # Configure logging
 logging.basicConfig(

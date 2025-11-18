@@ -153,8 +153,8 @@ async def search_photos(query: str, n_results: int = 5) -> list:
 
     return [{
         'uuid': results['ids'][0][i],
-        'path': results['metadatas'][0][i]['path'],
-        'filename': results['metadatas'][0][i]['filename'],
+        'path': results['metadatas'][0][i].get('path', 'N/A'),
+        'filename': results['metadatas'][0][i].get('filename', 'Unknown'),
         'description': results['documents'][0][i],
         'distance': results['distances'][0][i]
     } for i in range(len(results['ids'][0]))]
