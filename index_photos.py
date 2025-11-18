@@ -16,6 +16,9 @@ import time
 import logging
 import caffeine
 
+# Silence tokenizers fork warning
+os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -83,17 +86,49 @@ def save_indexed_cache(indexed_uuids):
         json.dump(list(indexed_uuids), f)
 
 def get_photo_path(photo):
-    """Get accessible path for photo, trying multiple methods"""
+    """Get accessible path for photo, trying multiple methods. Converts HEIC to JPEG."""
     start_time = time.time()
+    import subprocess
+
+    def convert_heic_to_jpeg(heic_path):
+        """Convert HEIC to JPEG using macOS sips tool"""
+        try:
+            logger.info(f"Converting HEIC to JPEG...")
+            convert_start = time.time()
+            temp_dir = tempfile.mkdtemp()
+            jpeg_path = os.path.join(temp_dir, Path(heic_path).stem + '.jpg')
+
+            # Use macOS sips tool to convert (much faster and native)
+            result = subprocess.run(
+                ['sips', '-s', 'format', 'jpeg', heic_path, '--out', jpeg_path],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+
+            if result.returncode == 0 and os.path.exists(jpeg_path):
+                logger.info(f"HEIC conversion completed in {time.time()-convert_start:.2f}s")
+                return jpeg_path, True  # needs_cleanup = True
+            else:
+                logger.error(f"HEIC conversion failed: {result.stderr}")
+                return None, False
+        except Exception as e:
+            logger.error(f"HEIC conversion failed: {e}")
+            return None, False
 
     # Try direct path first (fastest if available)
     if photo.path and os.path.exists(photo.path):
         logger.debug(f"Using direct path ({time.time()-start_time:.2f}s)")
+        # Check if HEIC and convert if needed
+        if photo.path.lower().endswith('.heic') or photo.path.lower().endswith('.heif'):
+            return convert_heic_to_jpeg(photo.path)
         return photo.path, False  # (path, needs_cleanup)
 
     # Try edited version
     if photo.path_edited and os.path.exists(photo.path_edited):
         logger.debug(f"Using edited version ({time.time()-start_time:.2f}s)")
+        if photo.path_edited.lower().endswith('.heic') or photo.path_edited.lower().endswith('.heif'):
+            return convert_heic_to_jpeg(photo.path_edited)
         return photo.path_edited, False
 
     # Try derivatives
@@ -101,6 +136,8 @@ def get_photo_path(photo):
         for deriv_path in photo.path_derivatives:
             if os.path.exists(deriv_path):
                 logger.debug(f"Using derivative path ({time.time()-start_time:.2f}s)")
+                if deriv_path.lower().endswith('.heic') or deriv_path.lower().endswith('.heif'):
+                    return convert_heic_to_jpeg(deriv_path)
                 return deriv_path, False
 
     # Last resort: export to temp directory
@@ -112,7 +149,17 @@ def get_photo_path(photo):
         exported = photo.export(temp_dir, timeout=30)
         if exported:
             logger.info(f"Photo export completed in {time.time()-export_start:.2f}s")
-            return exported[0], True  # (path, needs_cleanup)
+            exported_path = exported[0]
+            # Convert HEIC exports to JPEG
+            if exported_path.lower().endswith('.heic') or exported_path.lower().endswith('.heif'):
+                jpeg_path, _ = convert_heic_to_jpeg(exported_path)
+                # Clean up original HEIC export
+                try:
+                    os.remove(exported_path)
+                except:
+                    pass
+                return jpeg_path, True
+            return exported_path, True  # (path, needs_cleanup)
     except Exception as e:
         logger.error(f"Export failed after {time.time()-start_time:.2f}s: {e}")
 

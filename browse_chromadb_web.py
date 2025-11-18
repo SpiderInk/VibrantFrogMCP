@@ -55,6 +55,19 @@ class BrowserHandler(BaseHTTPRequestHandler):
                         const query = document.getElementById('query').value;
                         const response = await fetch('/api/search?q=' + encodeURIComponent(query));
                         const data = await response.json();
+
+                        // Check for error
+                        if (data.error) {
+                            document.getElementById('results').innerHTML =
+                                `<div style="color: red; padding: 20px; background: #fee;">
+                                    <strong>Search Error:</strong><br>
+                                    ${data.message}<br><br>
+                                    <strong>Technical details:</strong> ${data.error}<br><br>
+                                    <em>Solution: Re-index your photos to rebuild the search index.</em>
+                                </div>`;
+                            return;
+                        }
+
                         displayResults(data);
                     }
                     
@@ -123,16 +136,26 @@ class BrowserHandler(BaseHTTPRequestHandler):
         elif parsed.path.startswith('/api/search'):
             query_params = parse_qs(parsed.query)
             query = query_params.get('q', [''])[0]
-            
+
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.end_headers()
-            
-            results = collection.query(
-                query_texts=[query],
-                n_results=20,
-                include=['metadatas', 'documents', 'distances']
-            )
+
+            try:
+                results = collection.query(
+                    query_texts=[query],
+                    n_results=20,
+                    include=['metadatas', 'documents', 'distances']
+                )
+            except Exception as e:
+                # If vector search fails, return error
+                import sys
+                print(f"Search error: {e}", file=sys.stderr)
+                self.wfile.write(json.dumps({
+                    'error': str(e),
+                    'message': 'Vector search failed. Try reindexing or use "Show All" instead.'
+                }).encode())
+                return
             
             photos = []
             for id, doc, meta, dist in zip(
