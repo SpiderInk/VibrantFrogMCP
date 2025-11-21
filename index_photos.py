@@ -15,6 +15,9 @@ from chromadb.utils import embedding_functions
 import time
 import logging
 import caffeine
+import subprocess
+import psutil
+import csv
 
 # Silence tokenizers fork warning
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
@@ -27,9 +30,96 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+def get_ollama_memory_usage():
+    """Get current memory usage of Ollama processes in MB"""
+    try:
+        total_memory = 0
+        ollama_processes = []
+        for proc in psutil.process_iter(['pid', 'name', 'memory_info']):
+            if 'ollama' in proc.info['name'].lower():
+                memory_mb = proc.info['memory_info'].rss / (1024 * 1024)
+                total_memory += memory_mb
+                ollama_processes.append({
+                    'name': proc.info['name'],
+                    'pid': proc.info['pid'],
+                    'memory_mb': memory_mb
+                })
+        return total_memory, ollama_processes
+    except Exception as e:
+        logger.warning(f"Could not get Ollama memory usage: {e}")
+        return None, []
+
+def log_memory_to_file(photo_number, total_memory_mb, event_type="normal", session_start_time=None):
+    """
+    Log memory usage to CSV file for analysis
+
+    Args:
+        photo_number: Current photo number being processed
+        total_memory_mb: Total Ollama memory in MB
+        event_type: Type of event ("start", "normal", "pre_restart", "post_restart", "end")
+        session_start_time: Start time of the session (for elapsed time calculation)
+    """
+    try:
+        # Create file with header if it doesn't exist
+        file_exists = MEMORY_LOG.exists()
+
+        with open(MEMORY_LOG, 'a', newline='') as f:
+            writer = csv.writer(f)
+
+            if not file_exists:
+                writer.writerow([
+                    'timestamp',
+                    'photo_number',
+                    'memory_mb',
+                    'event_type',
+                    'elapsed_minutes'
+                ])
+
+            timestamp = datetime.now().isoformat()
+            elapsed_minutes = None
+            if session_start_time:
+                elapsed_minutes = (time.time() - session_start_time) / 60
+
+            writer.writerow([
+                timestamp,
+                photo_number,
+                f"{total_memory_mb:.1f}" if total_memory_mb is not None else "N/A",
+                event_type,
+                f"{elapsed_minutes:.1f}" if elapsed_minutes else "N/A"
+            ])
+    except Exception as e:
+        logger.warning(f"Could not log memory to file: {e}")
+
+def restart_ollama():
+    """Restart Ollama to clear memory leaks"""
+    logger.info("🔄 Restarting Ollama to prevent memory issues...")
+    try:
+        # Kill Ollama processes
+        subprocess.run(['killall', '-9', 'Ollama', 'ollama'],
+                      capture_output=True, timeout=5)
+        time.sleep(2)
+
+        # Restart Ollama app
+        subprocess.run(['open', '-a', 'Ollama'],
+                      capture_output=True, timeout=5)
+        time.sleep(5)
+
+        logger.info("✅ Ollama restarted successfully")
+
+        # Log memory after restart
+        mem, procs = get_ollama_memory_usage()
+        if mem is not None:
+            logger.info(f"📊 Ollama memory after restart: {mem:.1f} MB")
+
+        return True
+    except Exception as e:
+        logger.error(f"❌ Failed to restart Ollama: {e}")
+        return False
+
 # Same DB path as MCP server
 DB_PATH = os.path.expanduser("~/Library/Application Support/VibrantFrogMCP/photo_index")
 INDEXED_CACHE = Path(DB_PATH).parent / "indexed_photos.json"
+MEMORY_LOG = Path(DB_PATH).parent / "ollama_memory_log.csv"
 
 # Initialize ChromaDB (same as MCP server)
 chroma_client = chromadb.PersistentClient(path=DB_PATH)
@@ -41,8 +131,8 @@ collection = chroma_client.get_or_create_collection(
     embedding_function=embedding_function
 )
 
-async def describe_image(image_path: str) -> str:
-    """Use LLaVA to generate rich description of image"""
+async def describe_image(image_path: str, timeout_seconds: int = 120) -> str:
+    """Use LLaVA to generate rich description of image with timeout"""
     start_time = time.time()
     logger.info(f"Starting LLaVA description generation for {os.path.basename(image_path)}")
 
@@ -58,19 +148,33 @@ async def describe_image(image_path: str) -> str:
 - Activities or actions taking place
 Be specific and detailed to enable accurate searching."""
 
-    response = ollama.chat(
-        model='llava:7b',  # Using 7b for better performance (2-3x faster than 13b)
-        messages=[{
-            'role': 'user',
-            'content': prompt,
-            'images': [image_path]
-        }]
-    )
+    try:
+        # Run ollama.chat in executor with timeout
+        loop = asyncio.get_event_loop()
+        response = await asyncio.wait_for(
+            loop.run_in_executor(
+                None,
+                lambda: ollama.chat(
+                    model='llava:7b',
+                    messages=[{
+                        'role': 'user',
+                        'content': prompt,
+                        'images': [image_path]
+                    }]
+                )
+            ),
+            timeout=timeout_seconds
+        )
 
-    elapsed = time.time() - start_time
-    logger.info(f"LLaVA description completed in {elapsed:.2f}s")
+        elapsed = time.time() - start_time
+        logger.info(f"LLaVA description completed in {elapsed:.2f}s")
 
-    return response['message']['content']
+        return response['message']['content']
+
+    except asyncio.TimeoutError:
+        elapsed = time.time() - start_time
+        logger.error(f"⏱️  LLaVA description timed out after {elapsed:.2f}s")
+        raise TimeoutError(f"Image description timed out after {timeout_seconds}s")
 
 def load_indexed_cache():
     """Load set of already-indexed photo UUIDs"""
@@ -131,11 +235,21 @@ def get_photo_path(photo):
             return convert_heic_to_jpeg(photo.path_edited)
         return photo.path_edited, False
 
-    # Try derivatives
+    # Try derivatives as LAST resort before export
+    # Some derivatives cause Ollama to hang, but they're better than nothing
+    # We'll try them in order and hope for the best
     if photo.path_derivatives:
         for deriv_path in photo.path_derivatives:
             if os.path.exists(deriv_path):
-                logger.debug(f"Using derivative path ({time.time()-start_time:.2f}s)")
+                # Prefer larger derivatives (less compressed)
+                # Skip the most problematic ones: _1_105_c, _1_102_o, _1_201_a
+                basename = os.path.basename(deriv_path)
+                if '_1_105_c' in basename or '_1_102_o' in basename or '_1_201_a' in basename:
+                    logger.debug(f"Skipping highly compressed derivative: {basename}")
+                    continue
+
+                # Try this derivative
+                logger.info(f"Using derivative (may be slow): {basename}")
                 if deriv_path.lower().endswith('.heic') or deriv_path.lower().endswith('.heif'):
                     return convert_heic_to_jpeg(deriv_path)
                 return deriv_path, False
@@ -195,6 +309,15 @@ async def index_photo_with_metadata(photo):
 
         if not photo_path:
             logger.warning(f"⚠️  Skipping {photo.original_filename}: No accessible path")
+            logger.warning(f"   UUID: {photo.uuid}")
+            logger.warning(f"   Direct path: {photo.path if photo.path else 'None'}")
+            logger.warning(f"   Direct path exists: {os.path.exists(photo.path) if photo.path else False}")
+            logger.warning(f"   Edited path: {photo.path_edited if photo.path_edited else 'None'}")
+            logger.warning(f"   Edited exists: {os.path.exists(photo.path_edited) if photo.path_edited else False}")
+            logger.warning(f"   Derivatives: {photo.path_derivatives if photo.path_derivatives else []}")
+            logger.warning(f"   Is iCloud asset: {photo.iscloudasset}")
+            logger.warning(f"   Date: {photo.date}")
+            logger.warning(f"   To open in Photos.app, run: osascript -e 'tell application \"Photos\" to spotlight \"{photo.uuid}\"'")
             return None
 
         # Step 2: Generate description using vision model
@@ -247,7 +370,11 @@ async def index_photo_with_metadata(photo):
         if photo.place:
             searchable_text += f"\nLocation: {photo.place.name}"
         if photo.albums:
-            searchable_text += f"\nAlbums: {', '.join([a.title for a in photo.albums])}"
+            try:
+                album_titles = [a.title if hasattr(a, 'title') else str(a) for a in photo.albums]
+                searchable_text += f"\nAlbums: {', '.join(album_titles)}"
+            except:
+                pass  # Skip albums if there's any issue
 
         metadata = clean_metadata(metadata)
         metadata_elapsed = time.time() - metadata_start
@@ -332,10 +459,51 @@ async def poll_and_index(limit=None, skip_indexed=True, include_cloud=True, reve
     # Index photos
     newly_indexed = []
 
+    # Log initial Ollama memory usage
+    mem, procs = get_ollama_memory_usage()
+    if mem is not None:
+        logger.info(f"📊 Initial Ollama memory usage: {mem:.1f} MB")
+        for proc in procs:
+            logger.info(f"   {proc['name']} (PID {proc['pid']}): {proc['memory_mb']:.1f} MB")
+        # Log to file
+        log_memory_to_file(0, mem, "start", session_start)
+
     for i, photo in enumerate(photos, 1):
         logger.info(f"\n{'='*60}")
         logger.info(f"[{i}/{len(photos)}] Starting photo processing")
         photo_start = time.time()
+
+        # Auto-restart Ollama every 500 photos to prevent memory leaks
+        if i > 1 and i % 500 == 0:
+            logger.info(f"\n{'='*60}")
+            logger.info(f"🔄 Reached {i} photos - time for preventive Ollama restart")
+
+            # Log memory before restart
+            mem_before, procs_before = get_ollama_memory_usage()
+            if mem_before is not None:
+                logger.info(f"📊 Ollama memory before restart: {mem_before:.1f} MB")
+                for proc in procs_before:
+                    logger.info(f"   {proc['name']} (PID {proc['pid']}): {proc['memory_mb']:.1f} MB")
+                # Log to file
+                log_memory_to_file(i, mem_before, "pre_restart", session_start)
+
+            # Restart Ollama
+            restart_ollama()
+
+            # Log memory after restart
+            mem_after, _ = get_ollama_memory_usage()
+            if mem_after is not None:
+                log_memory_to_file(i, mem_after, "post_restart", session_start)
+
+            logger.info(f"{'='*60}\n")
+
+        # Log memory usage every 50 photos (for monitoring trends)
+        elif i > 1 and i % 50 == 0:
+            mem, procs = get_ollama_memory_usage()
+            if mem is not None:
+                logger.info(f"📊 Ollama memory at photo {i}: {mem:.1f} MB")
+                # Log to file
+                log_memory_to_file(i, mem, "checkpoint", session_start)
 
         uuid = await index_photo_with_metadata(photo)
         if uuid:
@@ -356,6 +524,15 @@ async def poll_and_index(limit=None, skip_indexed=True, include_cloud=True, reve
     # Final save
     save_indexed_cache(indexed_uuids)
 
+    # Log final Ollama memory usage
+    mem_final, procs_final = get_ollama_memory_usage()
+    if mem_final is not None:
+        logger.info(f"\n📊 Final Ollama memory usage: {mem_final:.1f} MB")
+        for proc in procs_final:
+            logger.info(f"   {proc['name']} (PID {proc['pid']}): {proc['memory_mb']:.1f} MB")
+        # Log to file
+        log_memory_to_file(len(photos), mem_final, "end", session_start)
+
     session_elapsed = time.time() - session_start
     logger.info(f"\n{'='*60}")
     logger.info(f"✨ Done! Indexed {len(newly_indexed)} new photos")
@@ -363,6 +540,9 @@ async def poll_and_index(limit=None, skip_indexed=True, include_cloud=True, reve
     logger.info(f"⏱️  Total session time: {session_elapsed/60:.1f} minutes")
     if newly_indexed:
         logger.info(f"⏱️  Average time per photo: {session_elapsed/len(newly_indexed):.2f}s")
+
+    logger.info(f"\n📈 Memory log saved to: {MEMORY_LOG}")
+    logger.info(f"   You can analyze Ollama memory trends across the {len(photos)} photos processed")
 
 if __name__ == "__main__":
     import sys
