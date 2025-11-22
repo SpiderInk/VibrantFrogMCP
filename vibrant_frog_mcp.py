@@ -15,6 +15,10 @@ import time
 import logging
 import base64
 from photo_retrieval import get_photo_by_uuid, get_photo_path_for_display, cleanup_temp_photo
+from album_manager import (
+    create_album, delete_album, list_albums, get_album_photo_count,
+    add_photos_to_album, remove_photos_from_album, create_album_from_search
+)
 
 # Configure logging
 logging.basicConfig(
@@ -317,6 +321,104 @@ async def list_tools() -> list[Tool]:
                 },
                 "required": ["uuid"]
             }
+        ),
+        Tool(
+            name="create_album_from_search",
+            description="Search for photos and create a new Apple Photos album with the results. This is the easiest way to create an album - just provide a name and search query.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "album_name": {
+                        "type": "string",
+                        "description": "Name for the new album"
+                    },
+                    "search_query": {
+                        "type": "string",
+                        "description": "Natural language search query to find photos (e.g., 'beach sunset vacation')"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of photos to add (default: 100)",
+                        "default": 100
+                    }
+                },
+                "required": ["album_name", "search_query"]
+            }
+        ),
+        Tool(
+            name="create_album",
+            description="Create a new empty album in Apple Photos",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "album_name": {
+                        "type": "string",
+                        "description": "Name for the new album"
+                    }
+                },
+                "required": ["album_name"]
+            }
+        ),
+        Tool(
+            name="delete_album",
+            description="Delete an album from Apple Photos. This only deletes the album, not the photos in it.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "album_name": {
+                        "type": "string",
+                        "description": "Name of the album to delete"
+                    }
+                },
+                "required": ["album_name"]
+            }
+        ),
+        Tool(
+            name="list_albums",
+            description="List all albums in Apple Photos",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        ),
+        Tool(
+            name="add_photos_to_album",
+            description="Add photos to an existing Apple Photos album using their UUIDs from search results",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "album_name": {
+                        "type": "string",
+                        "description": "Name of the album to add photos to"
+                    },
+                    "photo_uuids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of photo UUIDs to add to the album"
+                    }
+                },
+                "required": ["album_name", "photo_uuids"]
+            }
+        ),
+        Tool(
+            name="remove_photos_from_album",
+            description="Remove photos from an Apple Photos album (does not delete the photos themselves)",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "album_name": {
+                        "type": "string",
+                        "description": "Name of the album to remove photos from"
+                    },
+                    "photo_uuids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of photo UUIDs to remove from the album"
+                    }
+                },
+                "required": ["album_name", "photo_uuids"]
+            }
         )
     ]
 
@@ -374,6 +476,46 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                          ("(Exported from iCloud and cleaned up)" if result['was_exported'] else "(Local file)")
                 )
             ]
+
+        elif name == "create_album_from_search":
+            result = create_album_from_search(
+                arguments["album_name"],
+                arguments["search_query"],
+                arguments.get("limit", 100)
+            )
+            return [TextContent(type="text", text=result['message'])]
+
+        elif name == "create_album":
+            result = create_album(arguments["album_name"])
+            return [TextContent(type="text", text=result['message'])]
+
+        elif name == "delete_album":
+            result = delete_album(arguments["album_name"])
+            return [TextContent(type="text", text=result['message'])]
+
+        elif name == "list_albums":
+            result = list_albums()
+            if result['success']:
+                output = f"Found {result['count']} albums:\n\n"
+                for album in result['albums']:
+                    output += f"  - {album}\n"
+                return [TextContent(type="text", text=output)]
+            else:
+                return [TextContent(type="text", text=f"Error listing albums: {result.get('message', 'Unknown error')}")]
+
+        elif name == "add_photos_to_album":
+            result = add_photos_to_album(
+                arguments["album_name"],
+                arguments["photo_uuids"]
+            )
+            return [TextContent(type="text", text=result['message'])]
+
+        elif name == "remove_photos_from_album":
+            result = remove_photos_from_album(
+                arguments["album_name"],
+                arguments["photo_uuids"]
+            )
+            return [TextContent(type="text", text=result['message'])]
 
         else:
             raise ValueError(f"Unknown tool: {name}")
