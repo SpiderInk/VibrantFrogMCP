@@ -81,3 +81,13 @@ Thumbs.db
 notes.txt
 TODO.txt
 scratch/
+
+# Temporary/planning documents (not needed in repo)
+VIBRANTFROG_APP_SPEC*.md
+FACE_RECOGNITION_*.md
+
+# Face recognition experimental scripts (if not ready)
+# Uncomment these if you're not actively working on face recognition:
+# browse_faces_web.py
+# cluster_faces.py
+# index_faces.py

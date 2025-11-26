@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "vibrant-frog": {
+      "command": "python3",
+      "args": [
+        "/Users/tpiazza/git/VibrantFrogMCP/vibrant_frog_mcp.py",
+        "--transport",
+        "stdio"
+      ],
+      "env": {}
+    }
+  }
+}

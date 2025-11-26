@@ -525,13 +525,217 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         return [TextContent(type="text", text=f"Error: {str(e)}")]
 
 async def main():
-    print("Starting MCP server...", file=sys.stderr)
-    async with mcp.server.stdio.stdio_server() as (read_stream, write_stream):
-        await app.run(
-            read_stream,
-            write_stream,
-            app.create_initialization_options()
+    import argparse
+
+    parser = argparse.ArgumentParser(description='VibrantFrog MCP Server')
+    parser.add_argument('--transport', choices=['stdio', 'http'], default='stdio',
+                       help='Transport mode: stdio (for Claude Desktop) or http (for VibrantFrog app)')
+    parser.add_argument('--host', default='127.0.0.1',
+                       help='HTTP host (only used with --transport http)')
+    parser.add_argument('--port', type=int, default=5050,
+                       help='HTTP port (only used with --transport http)')
+
+    args = parser.parse_args()
+
+    if args.transport == 'stdio':
+        print("Starting MCP server in stdio mode...", file=sys.stderr)
+        async with mcp.server.stdio.stdio_server() as (read_stream, write_stream):
+            await app.run(
+                read_stream,
+                write_stream,
+                app.create_initialization_options()
+            )
+    else:  # http - Using Streamable HTTP transport (MCP 2025-03-26)
+        print(f"Starting MCP server in Streamable HTTP mode on {args.host}:{args.port}...", file=sys.stderr)
+        from starlette.applications import Starlette
+        from starlette.routing import Route
+        from starlette.responses import JSONResponse, Response
+        from starlette.requests import Request
+        import uvicorn
+        import uuid
+
+        # Session management
+        sessions = {}  # session_id -> session_data
+
+        async def handle_mcp_post(request: Request):
+            """Handle POST requests to /mcp endpoint (Streamable HTTP)"""
+            try:
+                # Get session ID if provided
+                session_id = request.headers.get("mcp-session-id")
+
+                # Parse JSON-RPC request
+                body = await request.json()
+
+                # Check if this is an initialize request
+                if body.get("method") == "initialize":
+                    # Create new session
+                    session_id = str(uuid.uuid4())
+                    sessions[session_id] = {"initialized": True}
+
+                    # Create response
+                    result = {
+                        "jsonrpc": "2.0",
+                        "id": body.get("id"),
+                        "result": {
+                            "protocolVersion": "2024-11-05",
+                            "capabilities": {
+                                "tools": {}
+                            },
+                            "serverInfo": {
+                                "name": app.name,
+                                "version": "1.0.0"
+                            }
+                        }
+                    }
+
+                    # Return JSON response with session ID header
+                    return JSONResponse(
+                        result,
+                        headers={"Mcp-Session-Id": session_id}
+                    )
+
+                # Handle tools/list
+                elif body.get("method") == "tools/list":
+                    tools = await list_tools()
+                    result = {
+                        "jsonrpc": "2.0",
+                        "id": body.get("id"),
+                        "result": {
+                            "tools": [
+                                {
+                                    "name": t.name,
+                                    "description": t.description,
+                                    "inputSchema": t.inputSchema
+                                }
+                                for t in tools
+                            ]
+                        }
+                    }
+                    return JSONResponse(result)
+
+                # Handle tools/call
+                elif body.get("method") == "tools/call":
+                    params = body.get("params", {})
+                    tool_name = params.get("name")
+                    arguments = params.get("arguments", {})
+
+                    # Call the tool
+                    content_list = await call_tool(tool_name, arguments)
+
+                    # Convert to proper format
+                    result = {
+                        "jsonrpc": "2.0",
+                        "id": body.get("id"),
+                        "result": {
+                            "content": [
+                                {
+                                    "type": c.type,
+                                    "text": getattr(c, 'text', None),
+                                    "data": getattr(c, 'data', None),
+                                    "mimeType": getattr(c, 'mimeType', None)
+                                }
+                                for c in content_list
+                            ]
+                        }
+                    }
+                    return JSONResponse(result)
+
+                # Handle notifications (no response needed)
+                elif "id" not in body:
+                    return Response(status_code=202)  # Accepted
+
+                # Unknown method
+                else:
+                    return JSONResponse({
+                        "jsonrpc": "2.0",
+                        "id": body.get("id"),
+                        "error": {
+                            "code": -32601,
+                            "message": f"Method not found: {body.get('method')}"
+                        }
+                    })
+
+            except Exception as e:
+                logger.error(f"Error handling MCP request: {e}")
+                return JSONResponse({
+                    "jsonrpc": "2.0",
+                    "id": body.get("id") if hasattr(body, 'get') else None,
+                    "error": {
+                        "code": -32603,
+                        "message": f"Internal error: {str(e)}"
+                    }
+                }, status_code=500)
+
+        async def handle_mcp_get(request: Request):
+            """Handle GET requests to /mcp endpoint (SSE stream for server messages)"""
+            # Check if client wants SSE
+            accept = request.headers.get("accept", "")
+            if "text/event-stream" not in accept:
+                return Response(status_code=405, content="GET requires Accept: text/event-stream")
+
+            # Return SSE stream
+            async def event_stream():
+                """Generate SSE events for server-initiated messages"""
+                # Keep connection alive with periodic heartbeat
+                try:
+                    while True:
+                        # Send keepalive comment every 30 seconds
+                        yield f": keepalive\n\n"
+                        await asyncio.sleep(30)
+                except Exception as e:
+                    logger.error(f"SSE stream error: {e}")
+
+            from starlette.responses import StreamingResponse
+            return StreamingResponse(
+                event_stream(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no"
+                }
+            )
+
+        # CORS middleware for browser clients (MCP Inspector)
+        from starlette.middleware.cors import CORSMiddleware
+
+        async def handle_mcp_options(_request: Request):
+            """Handle OPTIONS requests for CORS preflight"""
+            return Response(
+                status_code=200,
+                headers={
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+                    "Access-Control-Allow-Headers": "Content-Type, Accept, Mcp-Session-Id",
+                    "Access-Control-Max-Age": "86400"
+                }
+            )
+
+        starlette_app = Starlette(
+            routes=[
+                Route("/mcp", endpoint=handle_mcp_post, methods=["POST"]),
+                Route("/mcp", endpoint=handle_mcp_get, methods=["GET"]),
+                Route("/mcp", endpoint=handle_mcp_options, methods=["OPTIONS"]),
+            ]
         )
+
+        # Add CORS middleware
+        starlette_app = CORSMiddleware(
+            starlette_app,
+            allow_origins=["*"],
+            allow_credentials=True,
+            allow_methods=["GET", "POST", "OPTIONS"],
+            allow_headers=["*"],
+        )
+
+        config = uvicorn.Config(
+            starlette_app,
+            host=args.host,
+            port=args.port,
+            log_level="info"
+        )
+        server = uvicorn.Server(config)
+        await server.serve()
 
 if __name__ == "__main__":
     asyncio.run(main())
