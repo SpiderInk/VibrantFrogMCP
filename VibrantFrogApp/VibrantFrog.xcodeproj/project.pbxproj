@@ -24,6 +24,7 @@
 		1A0000010000000000000017 /* MCPClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000020000000000000017 /* MCPClient.swift */; };
 		1A0000010000000000000018 /* MCPTestView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000020000000000000018 /* MCPTestView.swift */; };
 		1A0000010000000000000019 /* MCPClientHTTP.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000020000000000000019 /* MCPClientHTTP.swift */; };
+		719464D12ED69BDD00F260DE /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 719464D02ED69BDD00F260DE /* ChatView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -53,13 +54,14 @@
 		1A0000020000000000000009 /* IndexingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IndexingView.swift; sourceTree = "<group>"; };
 		1A0000020000000000000010 /* Photo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Photo.swift; sourceTree = "<group>"; };
 		1A0000020000000000000011 /* EmbeddingStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmbeddingStore.swift; sourceTree = "<group>"; };
-		1A0000020000000000000012 /* llama.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = llama.xcframework; path = llama.xcframework; sourceTree = SOURCE_ROOT; };
+		1A0000020000000000000012 /* llama.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = llama.xcframework; sourceTree = SOURCE_ROOT; };
 		1A0000020000000000000014 /* VibrantFrog.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = VibrantFrog.entitlements; sourceTree = "<group>"; };
+		1A0000020000000000000015 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		1A0000020000000000000016 /* LibLlama.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibLlama.swift; sourceTree = "<group>"; };
 		1A0000020000000000000017 /* MCPClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPClient.swift; sourceTree = "<group>"; };
 		1A0000020000000000000018 /* MCPTestView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPTestView.swift; sourceTree = "<group>"; };
 		1A0000020000000000000019 /* MCPClientHTTP.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPClientHTTP.swift; sourceTree = "<group>"; };
-		1A0000020000000000000015 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		719464D02ED69BDD00F260DE /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -109,6 +111,7 @@
 		1A0000050000000000000004 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				719464D02ED69BDD00F260DE /* ChatView.swift */,
 				1A0000020000000000000018 /* MCPTestView.swift */,
 				1A0000020000000000000006 /* PhotoSearchView.swift */,
 				1A0000020000000000000007 /* PhotoGridView.swift */,
@@ -224,6 +227,7 @@
 				1A0000010000000000000006 /* PhotoSearchView.swift in Sources */,
 				1A0000010000000000000007 /* PhotoGridView.swift in Sources */,
 				1A0000010000000000000008 /* SettingsView.swift in Sources */,
+				719464D12ED69BDD00F260DE /* ChatView.swift in Sources */,
 				1A0000010000000000000009 /* IndexingView.swift in Sources */,
 				1A0000010000000000000010 /* Photo.swift in Sources */,
 				1A0000010000000000000011 /* EmbeddingStore.swift in Sources */,

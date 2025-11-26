@@ -10,6 +10,7 @@ import SwiftUI
 
 enum NavigationItem: String, CaseIterable, Identifiable {
     case chat = "Chat"
+    case mcp = "MCP Server"
     case search = "Search"
     case indexing = "Indexing"
     case settings = "Settings"
@@ -19,6 +20,7 @@ enum NavigationItem: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .chat: return "message"
+        case .mcp: return "network"
         case .search: return "magnifyingglass"
         case .indexing: return "arrow.triangle.2.circlepath"
         case .settings: return "gear"
@@ -44,6 +46,9 @@ struct ContentView: View {
         } detail: {
             switch selectedItem {
             case .chat:
+                ChatView()
+                    .environmentObject(mcpClient)
+            case .mcp:
                 MCPTestView()
                     .environmentObject(mcpClient)
             case .search:
