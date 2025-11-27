@@ -25,13 +25,17 @@ class MCPClientHTTP: ObservableObject {
     private let serverScriptPath: String
     private var sessionId: String?
 
+    convenience init() {
+        self.init(serverURL: URL(string: "http://127.0.0.1:5050")!)
+    }
+
     init(
-        serverURL: String = "http://127.0.0.1:5050",
+        serverURL: URL,
         pythonPath: String = "/usr/bin/python3",
         serverScriptPath: String = "/Users/tpiazza/git/VibrantFrogMCP/vibrant_frog_mcp.py"
     ) {
-        self.serverURL = URL(string: serverURL)!
-        self.mcpEndpoint = self.serverURL.appendingPathComponent("mcp")
+        self.serverURL = serverURL
+        self.mcpEndpoint = serverURL.appendingPathComponent("mcp")
         self.pythonPath = pythonPath
         self.serverScriptPath = serverScriptPath
 
@@ -44,11 +48,18 @@ class MCPClientHTTP: ObservableObject {
     // MARK: - Connection Management
 
     func connect() async throws {
-        // Start Python MCP server in HTTP mode
-        try startHTTPServer()
+        // Check if server is already running
+        let serverAlreadyRunning = await checkServerAlive()
 
-        // Wait for server to start
-        try await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
+        if !serverAlreadyRunning {
+            // Start Python MCP server in HTTP mode
+            try startHTTPServer()
+
+            // Wait for server to start
+            try await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
+        } else {
+            print("🌐 MCPClientHTTP: Server already running, connecting to existing instance")
+        }
 
         // Initialize MCP session
         try await initialize()
@@ -59,6 +70,23 @@ class MCPClientHTTP: ObservableObject {
         await MainActor.run {
             self.isConnected = true
             self.errorMessage = nil
+        }
+    }
+
+    private func checkServerAlive() async -> Bool {
+        // Try a simple HTTP request to see if server is responding
+        var request = URLRequest(url: serverURL)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 1.0
+
+        do {
+            let (_, response) = try await session.data(for: request)
+            if let httpResponse = response as? HTTPURLResponse {
+                return httpResponse.statusCode == 200 || httpResponse.statusCode == 404
+            }
+            return false
+        } catch {
+            return false
         }
     }
 
@@ -113,6 +141,15 @@ class MCPClientHTTP: ObservableObject {
         await MainActor.run {
             self.availableTools = result.tools
         }
+    }
+
+    func getTools() async throws -> [MCPTool] {
+        let result: ToolsListResult = try await sendRequest(method: "tools/list", params: EmptyParams())
+        return result.tools
+    }
+
+    func listTools() async throws -> ToolsListResult {
+        return try await sendRequest(method: "tools/list", params: EmptyParams())
     }
 
     func callTool(name: String, arguments: [String: Any]) async throws -> ToolCallResult {

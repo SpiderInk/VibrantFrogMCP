@@ -123,13 +123,17 @@ class PhotoLibraryService: ObservableObject {
 
     // MARK: - Image Loading
 
-    /// Load thumbnail image for a photo
-    func loadThumbnail(for photo: Photo, targetSize: CGSize = CGSize(width: 200, height: 200)) async -> NSImage? {
-        guard let asset = getAsset(byId: photo.id) else { return nil }
+    /// Load thumbnail by UUID (for LLM tool calling)
+    func loadThumbnailByUUID(_ uuid: String, targetSize: CGSize = CGSize(width: 200, height: 200)) async -> NSImage? {
+        print("📸 PhotoLibraryService: Loading thumbnail for UUID: \(uuid)")
+        guard let asset = getAsset(byId: uuid) else {
+            print("❌ PhotoLibraryService: Asset not found for UUID: \(uuid)")
+            return nil
+        }
 
         return await withCheckedContinuation { continuation in
             let options = PHImageRequestOptions()
-            options.deliveryMode = .opportunistic
+            options.deliveryMode = .highQualityFormat
             options.isNetworkAccessAllowed = true
             options.isSynchronous = false
 
@@ -139,9 +143,34 @@ class PhotoLibraryService: ObservableObject {
                 contentMode: .aspectFill,
                 options: options
             ) { image, _ in
+                if image != nil {
+                    print("✅ PhotoLibraryService: Got thumbnail for \(uuid)")
+                } else {
+                    print("❌ PhotoLibraryService: Failed to get thumbnail for \(uuid)")
+                }
                 continuation.resume(returning: image)
             }
         }
+    }
+
+    /// Load multiple thumbnails by UUIDs
+    func loadThumbnailsByUUIDs(_ uuids: [String], targetSize: CGSize = CGSize(width: 200, height: 200)) async -> [String: NSImage] {
+        print("📸 PhotoLibraryService: Loading \(uuids.count) thumbnails")
+        var results: [String: NSImage] = [:]
+
+        for uuid in uuids {
+            if let image = await loadThumbnailByUUID(uuid, targetSize: targetSize) {
+                results[uuid] = image
+            }
+        }
+
+        print("✅ PhotoLibraryService: Loaded \(results.count)/\(uuids.count) thumbnails")
+        return results
+    }
+
+    /// Load thumbnail image for a photo
+    func loadThumbnail(for photo: Photo, targetSize: CGSize = CGSize(width: 200, height: 200)) async -> NSImage? {
+        return await loadThumbnailByUUID(photo.id, targetSize: targetSize)
     }
 
     /// Load full-resolution image for a photo
