@@ -143,10 +143,21 @@ struct PhotoSearchView: View {
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
 
-            Button("Request Access") {
-                photoLibraryService.requestAuthorization()
+            if photoLibraryService.authorizationStatus == .denied {
+                Button("Open System Settings") {
+                    photoLibraryService.openSystemSettings()
+                }
+                .buttonStyle(.borderedProminent)
+
+                Text("Enable VibrantFrog under Privacy & Security → Photos")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Button("Request Access") {
+                    photoLibraryService.requestAuthorization()
+                }
+                .buttonStyle(.borderedProminent)
             }
-            .buttonStyle(.borderedProminent)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

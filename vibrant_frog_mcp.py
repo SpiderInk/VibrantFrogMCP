@@ -437,19 +437,21 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 arguments["query"],
                 arguments.get("n_results", 5)
             )
-            
+
             if not results:
                 return [TextContent(type="text", text="No photos found matching your query.")]
-            
+
             output = f"Found {len(results)} photos:\n\n"
             for i, r in enumerate(results, 1):
+                photo_uri = f"photos://asset?uuid={r['uuid']}"
                 output += f"{i}. {r['filename']}\n"
                 output += f"   UUID: {r['uuid']}\n"
+                output += f"   Link: {photo_uri}\n"
                 output += f"   Path: {r['path']}\n"
                 output += f"   Description: {r['description']}\n"
                 output += f"   Relevance: {1 - r['distance']:.2f}\n\n"
 
-            output += "\nTo view a photo, use the get_photo tool with the UUID."
+            output += "\nTo view a photo, click the Link or use the get_photo tool with the UUID."
 
             return [TextContent(type="text", text=output)]
         

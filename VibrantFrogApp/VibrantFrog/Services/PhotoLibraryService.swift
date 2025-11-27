@@ -29,14 +29,41 @@ class PhotoLibraryService: ObservableObject {
     // MARK: - Authorization
 
     func requestAuthorization() {
+        print("📸 PhotoLibraryService: requestAuthorization() called")
+        print("📸 PhotoLibraryService: Current status: \(authorizationStatus)")
+
+        // If already denied, open System Settings instead of re-requesting
+        if authorizationStatus == .denied {
+            print("⚠️ PhotoLibraryService: Permission was denied. Opening System Settings...")
+            openSystemSettings()
+            return
+        }
+
         Task {
+            print("📸 PhotoLibraryService: Requesting authorization for .readWrite...")
             let status = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
+            print("📸 PhotoLibraryService: Authorization result: \(status)")
             await MainActor.run {
                 self.authorizationStatus = status
+                print("📸 PhotoLibraryService: Updated authorizationStatus to \(status)")
                 if status == .authorized || status == .limited {
+                    print("📸 PhotoLibraryService: Authorization granted, loading photo count...")
                     self.loadPhotoCount()
+                } else {
+                    print("❌ PhotoLibraryService: Authorization denied or restricted")
+                    if status == .denied {
+                        print("⚠️ PhotoLibraryService: Opening System Settings to allow manual permission grant...")
+                        self.openSystemSettings()
+                    }
                 }
             }
+        }
+    }
+
+    /// Open System Settings to the Photos privacy panel
+    func openSystemSettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Photos") {
+            NSWorkspace.shared.open(url)
         }
     }
 
@@ -126,8 +153,12 @@ class PhotoLibraryService: ObservableObject {
     /// Load thumbnail by UUID (for LLM tool calling)
     func loadThumbnailByUUID(_ uuid: String, targetSize: CGSize = CGSize(width: 200, height: 200)) async -> NSImage? {
         print("📸 PhotoLibraryService: Loading thumbnail for UUID: \(uuid)")
+        print("📸 PhotoLibraryService: Current authorization status: \(authorizationStatus)")
+        print("📸 PhotoLibraryService: isAuthorized: \(isAuthorized)")
+
         guard let asset = getAsset(byId: uuid) else {
             print("❌ PhotoLibraryService: Asset not found for UUID: \(uuid)")
+            print("❌ PhotoLibraryService: This usually means photos access was not granted or UUID is invalid")
             return nil
         }
 

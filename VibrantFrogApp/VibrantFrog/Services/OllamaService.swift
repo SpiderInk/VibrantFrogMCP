@@ -146,7 +146,7 @@ class OllamaService: ObservableObject {
         let messages: [ChatMessage]
         let tools: [Tool]?
         let stream: Bool = false
-        let temperature: Double = 0.1  // Low temperature for more deterministic tool calling
+        let temperature: Double = 0.3  // Moderate temperature for better tool calling
     }
 
     struct ChatResponse: Codable {

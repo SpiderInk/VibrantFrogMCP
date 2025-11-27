@@ -118,6 +118,12 @@ struct AIChatView: View {
         .frame(minWidth: 600, minHeight: 400)
         .onAppear {
             viewModel.setup(mcpClient: mcpClient, photoService: photoService)
+
+            // Request photo library access if needed
+            if !photoService.isAuthorized {
+                photoService.requestAuthorization()
+            }
+
             Task {
                 await viewModel.ollamaService.checkAvailability()
 
@@ -176,21 +182,31 @@ class AIChatViewModel: ObservableObject {
             conversationHistory.append(OllamaService.ChatMessage(
                 role: "system",
                 content: """
-                You are a helpful AI assistant with access to photo management tools.
+                You are a helpful AI assistant with access to tools via function calling.
 
-                CRITICAL RULES:
-                1. When users ask about photos, you MUST call the tools directly - do NOT explain or describe what tools to use
-                2. NEVER write code or pseudocode - you have real function calling capability
-                3. DO NOT say "I will use tool X" or "You should call function Y" - just call it
-                4. DO NOT output markdown code blocks or example function calls - use actual tool calling
+                ABSOLUTELY CRITICAL - YOU MUST FOLLOW THESE RULES:
+                1. When users ask about photos, YOU MUST USE FUNCTION CALLING to invoke the tools
+                2. DO NOT write JSON or describe function calls - USE THE ACTUAL FUNCTION CALLING MECHANISM
+                3. DO NOT output text like {"name":"search_photos",...} - that is WRONG
+                4. DO NOT explain what you will do - JUST DO IT by calling the function
+                5. NEVER say "I will search" or "Let me find" - CALL THE FUNCTION IMMEDIATELY
 
-                Available tools:
-                - search_photos: Find photos by query
-                - create_album_from_search: Create albums from search results
-                - list_albums: List existing albums
+                You have these tools available:
+                - search_photos(query: string, n_results: int) - Search for photos
+                - create_album_from_search(name: string, query: string) - Create album from search
+                - list_albums() - List all albums
 
-                When a user asks "Show me beach photos", you MUST immediately call search_photos(query="beach"), not describe it.
-                After calling tools and getting results, provide a friendly natural language response summarizing what you found.
+                EXAMPLE OF CORRECT BEHAVIOR:
+                User: "Show me beach photos"
+                Assistant: [CALLS search_photos function with query="beach", n_results=10]
+                [After getting results]
+                Assistant: "I found 10 beach photos for you!"
+
+                EXAMPLE OF WRONG BEHAVIOR:
+                User: "Show me beach photos"
+                Assistant: {"name":"search_photos","parameters":{"query":"beach"}} <- THIS IS WRONG!
+
+                Remember: USE FUNCTION CALLING, not text descriptions of function calls.
                 """
             ))
         }
@@ -426,21 +442,97 @@ class AIChatViewModel: ObservableObject {
         return results
     }
 
+    /// Load thumbnails using MCP's get_photo tool
+    private func loadThumbnailsViaMCP(uuids: [String], mcpClient: MCPClientHTTP) async -> [String: NSImage] {
+        var thumbnails: [String: NSImage] = [:]
+
+        // Load thumbnails in parallel for better performance
+        await withTaskGroup(of: (String, NSImage?).self) { group in
+            for uuid in uuids {
+                group.addTask {
+                    do {
+                        print("📸 Fetching photo via MCP for UUID: \(uuid)")
+                        let result = try await mcpClient.callTool(
+                            name: "get_photo",
+                            arguments: ["uuid": uuid]
+                        )
+
+                        // Extract image data from result
+                        // The MCP server returns image data as base64 or file path
+                        for content in result.content {
+                            if content.type == "image" {
+                                // Handle base64 image data
+                                if let imageData = content.data,
+                                   let data = Data(base64Encoded: imageData),
+                                   let image = NSImage(data: data) {
+                                    print("✅ Loaded thumbnail via MCP for \(uuid)")
+                                    return (uuid, image)
+                                }
+                            } else if content.type == "text", let text = content.text {
+                                // Handle file path response
+                                if text.hasPrefix("/") || text.hasPrefix("file://") {
+                                    let filePath = text.replacingOccurrences(of: "file://", with: "")
+                                    if let image = NSImage(contentsOfFile: filePath) {
+                                        print("✅ Loaded thumbnail from path via MCP for \(uuid)")
+                                        return (uuid, image)
+                                    }
+                                }
+                            }
+                        }
+
+                        print("⚠️ No valid image data from MCP for \(uuid)")
+                        return (uuid, nil)
+                    } catch {
+                        print("❌ Failed to load photo via MCP for \(uuid): \(error)")
+                        return (uuid, nil)
+                    }
+                }
+            }
+
+            for await (uuid, image) in group {
+                if let image = image {
+                    thumbnails[uuid] = image
+                }
+            }
+        }
+
+        print("✅ Loaded \(thumbnails.count)/\(uuids.count) thumbnails via MCP")
+        return thumbnails
+    }
+
     private func parseUUIDs(from text: String) -> [String] {
         var uuids: [String] = []
+        var seenUUIDs = Set<String>()
         let lines = text.split(separator: "\n")
 
         for line in lines {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-            // Handle both "UUID:" and "   UUID:" formats
-            if trimmed.contains("UUID:") {
-                // Split on "UUID:" and take the part after it
-                if let uuidPart = trimmed.split(separator: ":").last {
-                    let uuid = String(uuidPart).trimmingCharacters(in: .whitespaces)
-                    // Validate it looks like a UUID (has dashes and is reasonable length)
-                    if !uuid.isEmpty && uuid.contains("-") && uuid.count > 20 {
+
+            // Parse from "Link: photos://asset?uuid=XXX" format
+            if trimmed.starts(with: "Link:") && trimmed.contains("photos://asset?uuid=") {
+                if let uuidRange = trimmed.range(of: "uuid=") {
+                    let uuid = String(trimmed[uuidRange.upperBound...]).trimmingCharacters(in: .whitespaces)
+                    if !uuid.isEmpty && uuid.contains("-") && uuid.count > 20 && !seenUUIDs.contains(uuid) {
                         uuids.append(uuid)
-                        print("  ✅ Parsed UUID: \(uuid)")
+                        seenUUIDs.insert(uuid)
+                        print("  ✅ Parsed UUID from Link: \(uuid)")
+                    }
+                }
+            }
+        }
+
+        // If no UUIDs found from links, try UUID: format as fallback
+        if uuids.isEmpty {
+            for line in lines {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.contains("UUID:") {
+                    if let uuidPart = trimmed.split(separator: ":").last {
+                        let uuid = String(uuidPart).trimmingCharacters(in: .whitespaces)
+                        if !uuid.isEmpty && uuid.contains("-") && uuid.count > 20 && !seenUUIDs.contains(uuid) {
+                            uuids.append(uuid)
+                            seenUUIDs.insert(uuid)
+                            print("  ✅ Parsed UUID: \(uuid)")
+                        }
                     }
                 }
             }
@@ -545,13 +637,28 @@ struct MessageView: View {
                                             openPhoto(uuid: thumb.uuid)
                                         }
                                 } else {
-                                    Rectangle()
-                                        .fill(Color.gray.opacity(0.3))
+                                    // No image - show link button
+                                    Button(action: {
+                                        openPhoto(uuid: thumb.uuid)
+                                    }) {
+                                        VStack(spacing: 8) {
+                                            Image(systemName: "photo.fill")
+                                                .font(.system(size: 40))
+                                                .foregroundStyle(.blue)
+                                            Text("Open in Photos")
+                                                .font(.caption)
+                                                .foregroundStyle(.blue)
+                                        }
                                         .frame(height: 150)
+                                        .frame(maxWidth: .infinity)
+                                        .background(Color.blue.opacity(0.1))
                                         .cornerRadius(8)
                                         .overlay(
-                                            ProgressView()
+                                            RoundedRectangle(cornerRadius: 8)
+                                                .stroke(Color.blue.opacity(0.3), lineWidth: 2)
                                         )
+                                    }
+                                    .buttonStyle(.plain)
                                 }
 
                                 if let desc = thumb.description {
