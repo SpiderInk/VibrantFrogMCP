@@ -387,7 +387,8 @@ struct AddServerSheet: View {
     @ObservedObject var registry: MCPServerRegistry
     @Environment(\.dismiss) var dismiss
     @State private var name = ""
-    @State private var url = "http://127.0.0.1:5050/mcp"
+    @State private var url = "http://127.0.0.1:5050"
+    @State private var endpointPath = "/mcp"
 
     var body: some View {
         VStack(spacing: 20) {
@@ -402,9 +403,18 @@ struct AddServerSheet: View {
                 }
 
                 LabeledContent("URL") {
-                    TextField("http://127.0.0.1:5050/mcp", text: $url)
+                    TextField("http://127.0.0.1:5050", text: $url)
                         .textFieldStyle(.roundedBorder)
                 }
+
+                LabeledContent("Endpoint Path") {
+                    TextField("/mcp", text: $endpointPath)
+                        .textFieldStyle(.roundedBorder)
+                }
+
+                Text("Leave endpoint path as '/mcp' for standard MCP servers. Use empty string if the URL is the complete endpoint.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             HStack {
@@ -416,7 +426,9 @@ struct AddServerSheet: View {
                 Spacer()
 
                 Button("Add") {
-                    registry.addServer(name: name, url: url)
+                    // Convert empty endpoint path to nil (use base URL directly)
+                    let finalEndpointPath = endpointPath.isEmpty ? "" : endpointPath
+                    registry.addServer(name: name, url: url, mcpEndpointPath: finalEndpointPath)
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)

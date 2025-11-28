@@ -54,19 +54,21 @@ struct Conversation: Identifiable, Codable, Hashable {
 
 struct ConversationMessage: Identifiable, Codable {
     let id: UUID
-    let role: String // "user", "assistant", "system"
+    let role: String // "user", "assistant", "system", "tool"
     var content: String
     let timestamp: Date
     var toolCalls: [ToolCall]?
     var photoUUIDs: [String]? // UUIDs of photos to display
+    var toolName: String? // Name of tool that was called
 
-    init(id: UUID = UUID(), role: String, content: String, toolCalls: [ToolCall]? = nil, photoUUIDs: [String]? = nil) {
+    init(id: UUID = UUID(), role: String, content: String, toolCalls: [ToolCall]? = nil, photoUUIDs: [String]? = nil, toolName: String? = nil) {
         self.id = id
         self.role = role
         self.content = content
         self.timestamp = Date()
         self.toolCalls = toolCalls
         self.photoUUIDs = photoUUIDs
+        self.toolName = toolName
     }
 }
 

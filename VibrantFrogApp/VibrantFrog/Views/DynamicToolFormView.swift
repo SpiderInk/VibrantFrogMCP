@@ -14,22 +14,37 @@ struct DynamicToolFormView: View {
     @State private var numberValues: [String: Double] = [:]
     @State private var boolValues: [String: Bool] = [:]
 
-    var schema: [String: Any] {
-        (tool.inputSchema as? [String: Any]) ?? [:]
+    var inputSchema: MCPTool.InputSchema? {
+        print("🔍 DynamicToolFormView: inputSchema type = \(type(of: tool.inputSchema))")
+        print("🔍 DynamicToolFormView: inputSchema value = \(tool.inputSchema)")
+
+        if let schema = tool.inputSchema as? MCPTool.InputSchema {
+            print("✅ Successfully cast to MCPTool.InputSchema")
+            print("✅ Properties count: \(schema.properties?.count ?? 0)")
+            print("✅ Required count: \(schema.required?.count ?? 0)")
+            return schema
+        } else {
+            print("❌ Failed to cast inputSchema to MCPTool.InputSchema")
+            return nil
+        }
     }
 
-    var properties: [String: [String: Any]] {
-        (schema["properties"] as? [String: [String: Any]]) ?? [:]
+    var properties: [String: MCPTool.InputSchema.Property] {
+        inputSchema?.properties ?? [:]
     }
 
     var required: [String] {
-        (schema["required"] as? [String]) ?? []
+        inputSchema?.required ?? []
     }
 
     var body: some View {
-        Form {
-            ForEach(Array(properties.keys.sorted()), id: \.self) { key in
+        VStack(alignment: .leading, spacing: 16) {
+            let sortedKeys = Array(properties.keys.sorted())
+            let _ = print("📋 DynamicToolFormView: Rendering with \(sortedKeys.count) properties: \(sortedKeys)")
+
+            ForEach(sortedKeys, id: \.self) { key in
                 if let propSchema = properties[key] {
+                    let _ = print("  📋 Creating FormField for '\(key)': \(propSchema)")
                     FormField(
                         key: key,
                         schema: propSchema,
@@ -38,40 +53,39 @@ struct DynamicToolFormView: View {
                         numberValues: $numberValues,
                         boolValues: $boolValues
                     )
+
+                    Divider()
                 }
             }
         }
-        .formStyle(.grouped)
         .onChange(of: stringValues) { _ in updateParameters() }
         .onChange(of: numberValues) { _ in updateParameters() }
         .onChange(of: boolValues) { _ in updateParameters() }
         .onAppear {
+            print("📋 DynamicToolFormView: onAppear called")
+            print("📋 InputSchema: \(String(describing: inputSchema))")
+            print("📋 Properties: \(properties)")
+            print("📋 Required: \(required)")
             initializeDefaults()
         }
     }
 
     private func initializeDefaults() {
         for (key, propSchema) in properties {
-            guard let type = propSchema["type"] as? String else { continue }
+            let type = propSchema.type
 
             switch type {
             case "string":
                 if stringValues[key] == nil {
-                    stringValues[key] = (propSchema["default"] as? String) ?? ""
+                    stringValues[key] = ""
                 }
             case "integer", "number":
                 if numberValues[key] == nil {
-                    if let defaultNum = propSchema["default"] as? Double {
-                        numberValues[key] = defaultNum
-                    } else if let defaultInt = propSchema["default"] as? Int {
-                        numberValues[key] = Double(defaultInt)
-                    } else {
-                        numberValues[key] = 0
-                    }
+                    numberValues[key] = 0
                 }
             case "boolean":
                 if boolValues[key] == nil {
-                    boolValues[key] = (propSchema["default"] as? Bool) ?? false
+                    boolValues[key] = false
                 }
             default:
                 break
@@ -89,8 +103,7 @@ struct DynamicToolFormView: View {
 
         for (key, value) in numberValues {
             if let propSchema = properties[key],
-               let type = propSchema["type"] as? String,
-               type == "integer" {
+               propSchema.type == "integer" {
                 params[key] = Int(value)
             } else {
                 params[key] = value
@@ -101,24 +114,25 @@ struct DynamicToolFormView: View {
             params[key] = value
         }
 
+        print("🔄 updateParameters() - New params: \(params)")
         parameters = params
     }
 }
 
 struct FormField: View {
     let key: String
-    let schema: [String: Any]
+    let schema: MCPTool.InputSchema.Property
     let isRequired: Bool
     @Binding var stringValues: [String: String]
     @Binding var numberValues: [String: Double]
     @Binding var boolValues: [String: Bool]
 
     var type: String {
-        (schema["type"] as? String) ?? "string"
+        schema.type
     }
 
     var description: String {
-        (schema["description"] as? String) ?? ""
+        schema.description ?? ""
     }
 
     var label: String {
@@ -127,35 +141,32 @@ struct FormField: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
+            Text(label)
+                .font(.headline)
+                .foregroundStyle(.primary)
+
             switch type {
             case "string":
-                LabeledContent(label) {
-                    TextField(description, text: Binding(
-                        get: { stringValues[key] ?? "" },
-                        set: { stringValues[key] = $0 }
-                    ))
-                    .textFieldStyle(.roundedBorder)
-                }
+                TextField(description, text: Binding(
+                    get: {
+                        let value = stringValues[key] ?? ""
+                        print("📝 TextField[\(key)] GET: '\(value)'")
+                        return value
+                    },
+                    set: { newValue in
+                        print("📝 TextField[\(key)] SET: '\(newValue)'")
+                        stringValues[key] = newValue
+                    }
+                ))
+                .textFieldStyle(.roundedBorder)
 
             case "integer", "number":
-                LabeledContent(label) {
-                    HStack {
-                        TextField("0", value: Binding(
-                            get: { numberValues[key] ?? 0 },
-                            set: { numberValues[key] = $0 }
-                        ), format: type == "integer" ? .number : .number.precision(.fractionLength(0...2)))
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 150)
-
-                        if let minimum = schema["minimum"] as? Double,
-                           let maximum = schema["maximum"] as? Double {
-                            Slider(value: Binding(
-                                get: { numberValues[key] ?? minimum },
-                                set: { numberValues[key] = $0 }
-                            ), in: minimum...maximum)
-                        }
-                    }
-                }
+                TextField("0", value: Binding(
+                    get: { numberValues[key] ?? 0 },
+                    set: { numberValues[key] = $0 }
+                ), format: type == "integer" ? .number : .number.precision(.fractionLength(0...2)))
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 200)
 
             case "boolean":
                 Toggle(label, isOn: Binding(
@@ -164,13 +175,11 @@ struct FormField: View {
                 ))
 
             default:
-                LabeledContent(label) {
-                    TextField(description, text: Binding(
-                        get: { stringValues[key] ?? "" },
-                        set: { stringValues[key] = $0 }
-                    ))
-                    .textFieldStyle(.roundedBorder)
-                }
+                TextField(description, text: Binding(
+                    get: { stringValues[key] ?? "" },
+                    set: { stringValues[key] = $0 }
+                ))
+                .textFieldStyle(.roundedBorder)
             }
 
             if !description.isEmpty {

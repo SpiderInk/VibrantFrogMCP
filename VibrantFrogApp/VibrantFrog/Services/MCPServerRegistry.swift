@@ -30,7 +30,7 @@ class MCPServerRegistry: ObservableObject {
                 MCPServer(
                     id: UUID(),
                     name: "VibrantFrog Photos",
-                    url: "http://127.0.0.1:5050/mcp",
+                    url: "http://127.0.0.1:5050",
                     isBuiltIn: true,
                     isEnabled: true
                 )
@@ -50,13 +50,14 @@ class MCPServerRegistry: ObservableObject {
 
     // MARK: - Server Management
 
-    func addServer(name: String, url: String) {
+    func addServer(name: String, url: String, mcpEndpointPath: String? = nil) {
         let server = MCPServer(
             id: UUID(),
             name: name,
             url: url,
             isBuiltIn: false,
-            isEnabled: true
+            isEnabled: true,
+            mcpEndpointPath: mcpEndpointPath
         )
         servers.append(server)
         saveServers()
@@ -120,8 +121,11 @@ class MCPServerRegistry: ObservableObject {
 
         for server in servers where server.isEnabled {
             do {
-                // Create temporary client for this server
-                let client = MCPClientHTTP(serverURL: URL(string: server.url)!)
+                // Create temporary client for this server with custom endpoint path
+                let client = MCPClientHTTP(
+                    serverURL: URL(string: server.url)!,
+                    mcpEndpointPath: server.mcpEndpointPath
+                )
                 try await client.connect()
 
                 let toolsList = try await client.getTools()
@@ -153,7 +157,10 @@ class MCPServerRegistry: ObservableObject {
 
     func getToolsForServer(_ server: MCPServer) async -> [RegistryMCPTool] {
         do {
-            let client = MCPClientHTTP(serverURL: URL(string: server.url)!)
+            let client = MCPClientHTTP(
+                serverURL: URL(string: server.url)!,
+                mcpEndpointPath: server.mcpEndpointPath
+            )
             try await client.connect()
 
             let toolsList = try await client.getTools()
@@ -192,6 +199,7 @@ struct MCPServer: Identifiable, Codable, Equatable, Hashable {
     var customPrompt: String?
     var disabledTools: [String]
     var connectionStatus: ConnectionStatus
+    var mcpEndpointPath: String? // Optional custom MCP endpoint path (default: /mcp)
 
     static func == (lhs: MCPServer, rhs: MCPServer) -> Bool {
         lhs.id == rhs.id
@@ -208,7 +216,7 @@ struct MCPServer: Identifiable, Codable, Equatable, Hashable {
         case error
     }
 
-    init(id: UUID, name: String, url: String, isBuiltIn: Bool, isEnabled: Bool, customPrompt: String? = nil, disabledTools: [String] = []) {
+    init(id: UUID, name: String, url: String, isBuiltIn: Bool, isEnabled: Bool, customPrompt: String? = nil, disabledTools: [String] = [], mcpEndpointPath: String? = nil) {
         self.id = id
         self.name = name
         self.url = url
@@ -217,6 +225,7 @@ struct MCPServer: Identifiable, Codable, Equatable, Hashable {
         self.customPrompt = customPrompt
         self.disabledTools = disabledTools
         self.connectionStatus = .unknown
+        self.mcpEndpointPath = mcpEndpointPath
     }
 }
 

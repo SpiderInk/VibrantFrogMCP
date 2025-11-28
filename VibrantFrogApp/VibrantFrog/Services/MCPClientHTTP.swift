@@ -32,10 +32,21 @@ class MCPClientHTTP: ObservableObject {
     init(
         serverURL: URL,
         pythonPath: String = "/usr/bin/python3",
-        serverScriptPath: String = "/Users/tpiazza/git/VibrantFrogMCP/vibrant_frog_mcp.py"
+        serverScriptPath: String = "/Users/tpiazza/git/VibrantFrogMCP/vibrant_frog_mcp.py",
+        mcpEndpointPath: String? = nil
     ) {
         self.serverURL = serverURL
-        self.mcpEndpoint = serverURL.appendingPathComponent("mcp")
+        // Use custom endpoint path if provided, otherwise default to /mcp
+        if let customPath = mcpEndpointPath {
+            // If the custom path is empty, use the base URL directly
+            if customPath.isEmpty {
+                self.mcpEndpoint = serverURL
+            } else {
+                self.mcpEndpoint = serverURL.appendingPathComponent(customPath)
+            }
+        } else {
+            self.mcpEndpoint = serverURL.appendingPathComponent("mcp")
+        }
         self.pythonPath = pythonPath
         self.serverScriptPath = serverScriptPath
 
@@ -48,24 +59,41 @@ class MCPClientHTTP: ObservableObject {
     // MARK: - Connection Management
 
     func connect() async throws {
-        // Check if server is already running
-        let serverAlreadyRunning = await checkServerAlive()
+        print("🌐 MCPClientHTTP: Attempting to connect to \(serverURL)")
+        print("🌐 MCPClientHTTP: MCP endpoint will be \(mcpEndpoint)")
 
-        if !serverAlreadyRunning {
-            // Start Python MCP server in HTTP mode
-            try startHTTPServer()
+        // Determine if this is a remote server (https:// or not localhost)
+        let isRemoteServer = serverURL.scheme == "https" ||
+                            (!(serverURL.host()?.contains("localhost") ?? false) &&
+                             !(serverURL.host()?.contains("127.0.0.1") ?? false))
 
-            // Wait for server to start
-            try await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
+        if isRemoteServer {
+            print("🌐 MCPClientHTTP: Detected remote server, skipping local Python server startup")
         } else {
-            print("🌐 MCPClientHTTP: Server already running, connecting to existing instance")
+            // Check if server is already running
+            let serverAlreadyRunning = await checkServerAlive()
+            print("🌐 MCPClientHTTP: Server alive check result: \(serverAlreadyRunning)")
+
+            if !serverAlreadyRunning {
+                print("🌐 MCPClientHTTP: Server not detected, attempting to start local Python server")
+                // Start Python MCP server in HTTP mode
+                try startHTTPServer()
+
+                // Wait for server to start
+                try await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
+            } else {
+                print("🌐 MCPClientHTTP: Server already running, connecting to existing instance")
+            }
         }
 
         // Initialize MCP session
+        print("🌐 MCPClientHTTP: Sending initialize request")
         try await initialize()
+        print("🌐 MCPClientHTTP: Initialize successful, loading tools")
 
         // Load available tools
         try await loadTools()
+        print("🌐 MCPClientHTTP: Tools loaded successfully")
 
         await MainActor.run {
             self.isConnected = true
@@ -170,6 +198,11 @@ class MCPClientHTTP: ObservableObject {
         let request = MCPRequest(id: id, method: method, params: params)
         let requestData = try JSONEncoder().encode(request)
 
+        print("📤 MCPClientHTTP: Sending \(method) request to \(mcpEndpoint)")
+        if let requestJSON = String(data: requestData, encoding: .utf8) {
+            print("📤 Request body: \(requestJSON)")
+        }
+
         // Create HTTP POST request to /mcp endpoint
         var urlRequest = URLRequest(url: mcpEndpoint)
         urlRequest.httpMethod = "POST"
@@ -180,41 +213,61 @@ class MCPClientHTTP: ObservableObject {
         // Add session ID if we have one
         if let sessionId = sessionId {
             urlRequest.setValue(sessionId, forHTTPHeaderField: "Mcp-Session-Id")
+            print("📤 Using session ID: \(sessionId)")
         }
 
         // Send the request
-        let (responseData, response) = try await session.data(for: urlRequest)
+        do {
+            let (responseData, response) = try await session.data(for: urlRequest)
 
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw MCPClientError.invalidResponse
-        }
-
-        // Check for session ID in response (on initialize)
-        if method == "initialize", let newSessionId = httpResponse.value(forHTTPHeaderField: "Mcp-Session-Id") {
-            await MainActor.run {
-                self.sessionId = newSessionId
+            guard let httpResponse = response as? HTTPURLResponse else {
+                print("❌ MCPClientHTTP: Invalid response type")
+                throw MCPClientError.invalidResponse
             }
+
+            print("📥 MCPClientHTTP: Received response with status \(httpResponse.statusCode)")
+            if let responseJSON = String(data: responseData, encoding: .utf8) {
+                print("📥 Response body: \(responseJSON)")
+            }
+
+            // Check for session ID in response (on initialize)
+            if method == "initialize", let newSessionId = httpResponse.value(forHTTPHeaderField: "Mcp-Session-Id") {
+                print("✅ Received new session ID: \(newSessionId)")
+                await MainActor.run {
+                    self.sessionId = newSessionId
+                }
+            }
+
+            guard httpResponse.statusCode == 200 else {
+                print("❌ MCPClientHTTP: HTTP error \(httpResponse.statusCode)")
+                throw MCPClientError.serverError(
+                    code: httpResponse.statusCode,
+                    message: "HTTP \(httpResponse.statusCode)"
+                )
+            }
+
+            // Parse JSON response
+            let mcpResponse = try JSONDecoder().decode(MCPResponse<R>.self, from: responseData)
+
+            if let error = mcpResponse.error {
+                print("❌ MCPClientHTTP: MCP error \(error.code): \(error.message)")
+                throw MCPClientError.serverError(code: error.code, message: error.message)
+            }
+
+            guard let result = mcpResponse.result else {
+                print("❌ MCPClientHTTP: No result in response")
+                throw MCPClientError.invalidResponse
+            }
+
+            print("✅ MCPClientHTTP: Successfully parsed response for \(method)")
+            return result
+
+        } catch let error as MCPClientError {
+            throw error
+        } catch {
+            print("❌ MCPClientHTTP: Network error: \(error.localizedDescription)")
+            throw error
         }
-
-        guard httpResponse.statusCode == 200 else {
-            throw MCPClientError.serverError(
-                code: httpResponse.statusCode,
-                message: "HTTP \(httpResponse.statusCode)"
-            )
-        }
-
-        // Parse JSON response
-        let mcpResponse = try JSONDecoder().decode(MCPResponse<R>.self, from: responseData)
-
-        if let error = mcpResponse.error {
-            throw MCPClientError.serverError(code: error.code, message: error.message)
-        }
-
-        guard let result = mcpResponse.result else {
-            throw MCPClientError.invalidResponse
-        }
-
-        return result
     }
 
     // MARK: - Helper for sending notifications (no response expected)

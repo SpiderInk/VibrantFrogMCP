@@ -19,10 +19,8 @@ struct DirectToolCallView: View {
     @State private var photoUUIDs: [String] = []
     @State private var thumbnails: [String: NSImage] = [:]
     @State private var callHistory: [ToolCallRecord] = []
-
-    var availableTools: [RegistryMCPTool] {
-        callHistory.isEmpty ? [] : Array(Set(callHistory.map { $0.tool }))
-    }
+    @State private var availableTools: [RegistryMCPTool] = []
+    @State private var isLoadingAvailableTools = false
 
     var body: some View {
         HSplitView {
@@ -52,7 +50,7 @@ struct DirectToolCallView: View {
                             VStack(alignment: .leading, spacing: 12) {
                                 Picker("Tool", selection: $selectedTool) {
                                     Text("Choose a tool...").tag(nil as RegistryMCPTool?)
-                                    ForEach(getAvailableTools()) { tool in
+                                    ForEach(availableTools) { tool in
                                         Text("\(tool.name) (\(tool.serverName))").tag(tool as RegistryMCPTool?)
                                     }
                                 }
@@ -82,6 +80,7 @@ struct DirectToolCallView: View {
                             GroupBox("Parameters") {
                                 DynamicToolFormView(tool: tool, parameters: $parameters)
                                     .padding()
+                                    .id(tool.id) // Force re-creation when tool changes
                             }
 
                             // Execute button
@@ -242,6 +241,10 @@ struct DirectToolCallView: View {
                 photoService.requestAuthorization()
             }
         }
+        .onChange(of: selectedTool) { _ in
+            // Clear parameters when tool selection changes
+            parameters = [:]
+        }
     }
 
     private var isValidParameters: Bool {
@@ -259,24 +262,33 @@ struct DirectToolCallView: View {
         return true
     }
 
-    private func getAvailableTools() -> [RegistryMCPTool] {
+    private func loadAllTools() {
+        print("🔧 DirectToolCallView: loadAllTools() called")
+        guard !isLoadingAvailableTools else {
+            print("⚠️ DirectToolCallView: Already loading tools, skipping")
+            return
+        }
+
+        isLoadingAvailableTools = true
+        print("🔧 DirectToolCallView: Starting to load tools from registry...")
         Task {
             do {
                 let tools = try await registry.getAllTools()
-                return tools
+                print("🔧 DirectToolCallView: Got \(tools.count) tools from registry")
+                for tool in tools {
+                    print("  - \(tool.name) (\(tool.serverName))")
+                }
+                await MainActor.run {
+                    availableTools = tools
+                    isLoadingAvailableTools = false
+                    print("🔧 DirectToolCallView: Updated availableTools, count = \(availableTools.count)")
+                }
             } catch {
-                return []
-            }
-        }
-        return []
-    }
-
-    private func loadAllTools() {
-        Task {
-            do {
-                _ = try await registry.getAllTools()
-            } catch {
-                print("Failed to load tools: \(error)")
+                print("❌ DirectToolCallView: Failed to load tools: \(error)")
+                await MainActor.run {
+                    availableTools = []
+                    isLoadingAvailableTools = false
+                }
             }
         }
     }

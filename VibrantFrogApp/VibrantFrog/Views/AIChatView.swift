@@ -136,6 +136,9 @@ struct AIChatView: View {
         .onAppear {
             viewModel.setup(mcpClient: mcpClient, photoService: photoService, conversationStore: conversationStore)
 
+            // Reload thumbnails when view appears (in case they were lost on tab switch)
+            viewModel.reloadThumbnailsIfNeeded()
+
             // Request photo library access if needed
             if !photoService.isAuthorized {
                 photoService.requestAuthorization()
@@ -183,6 +186,7 @@ class AIChatViewModel: ObservableObject {
     private var conversationStore: ConversationStore?
     private var conversationHistory: [OllamaService.ChatMessage] = []
     private var cancellables = Set<AnyCancellable>()
+    private var isSetup = false
 
     init() {
         // Forward changes from ollamaService to this ViewModel
@@ -192,12 +196,20 @@ class AIChatViewModel: ObservableObject {
     }
 
     func setup(mcpClient: MCPClientHTTP, photoService: PhotoLibraryService, conversationStore: ConversationStore) {
+        // Only setup once
+        if isSetup {
+            print("⚠️ AIChatViewModel: setup() called but already set up, skipping")
+            return
+        }
+
+        isSetup = true
         self.mcpClient = mcpClient
         self.photoService = photoService
         self.conversationStore = conversationStore
 
         // Load current conversation or create new one
         if let currentConv = conversationStore.currentConversation {
+            print("🔄 AIChatViewModel: Loading existing conversation on setup")
             loadConversation(currentConv)
         } else {
             startNewConversation(store: conversationStore)
@@ -212,14 +224,15 @@ class AIChatViewModel: ObservableObject {
     }
 
     func loadConversation(_ conversation: Conversation) {
-        // Convert stored messages to display format
+        // Convert stored messages to display format (without thumbnails initially)
         messages = conversation.messages.compactMap { msg -> AIChatMessage? in
             guard let role = AIChatMessage.MessageRole(from: msg.role) else { return nil }
             return AIChatMessage(
                 role: role,
                 content: msg.content,
                 timestamp: msg.timestamp,
-                photoThumbnails: nil // TODO: Re-load thumbnails if needed
+                toolName: msg.toolName,
+                photoThumbnails: nil
             )
         }
 
@@ -234,6 +247,86 @@ class AIChatViewModel: ObservableObject {
         // If no system message, add one
         if conversationHistory.isEmpty || conversationHistory.first?.role != "system" {
             setupSystemMessage()
+        }
+
+        // Load thumbnails asynchronously for messages that have photoUUIDs
+        print("🔄 Loading conversation with \(conversation.messages.count) messages")
+        Task {
+            for (index, msg) in conversation.messages.enumerated() {
+                if let uuids = msg.photoUUIDs, !uuids.isEmpty {
+                    print("📸 Message \(index) has \(uuids.count) photo UUIDs: \(uuids.prefix(3))...")
+
+                    guard let photoService = photoService else {
+                        print("⚠️ PhotoService not available")
+                        continue
+                    }
+
+                    let thumbnails = await photoService.loadThumbnailsByUUIDs(uuids)
+                    print("✅ Loaded \(thumbnails.count) thumbnails for message \(index)")
+
+                    await MainActor.run {
+                        guard index < messages.count else {
+                            print("⚠️ Index \(index) out of bounds (messages.count = \(messages.count))")
+                            return
+                        }
+
+                        // Create a new message with thumbnails to trigger SwiftUI update
+                        var updatedMessage = messages[index]
+                        updatedMessage.photoThumbnails = uuids.map { uuid in
+                            PhotoThumbnail(uuid: uuid, image: thumbnails[uuid], description: nil)
+                        }
+                        messages[index] = updatedMessage
+                        print("✅ Updated message \(index) with \(updatedMessage.photoThumbnails?.count ?? 0) thumbnails")
+                    }
+                }
+            }
+            print("🔄 Finished loading all thumbnails")
+        }
+    }
+
+    func reloadThumbnailsIfNeeded() {
+        print("🔄 reloadThumbnailsIfNeeded() called")
+
+        guard let conversationStore = conversationStore,
+              let currentConv = conversationStore.currentConversation else {
+            print("⚠️ No current conversation to reload thumbnails for")
+            return
+        }
+
+        // Check if any messages have photoUUIDs but missing thumbnails
+        Task {
+            for (index, msg) in currentConv.messages.enumerated() {
+                if let uuids = msg.photoUUIDs, !uuids.isEmpty {
+                    // Check if this message already has thumbnails loaded
+                    guard index < messages.count else { continue }
+
+                    let hasLoadedThumbnails = messages[index].photoThumbnails?.allSatisfy { $0.image != nil } ?? false
+
+                    if !hasLoadedThumbnails {
+                        print("📸 Reloading thumbnails for message \(index) with \(uuids.count) photo UUIDs")
+
+                        guard let photoService = photoService else {
+                            print("⚠️ PhotoService not available")
+                            continue
+                        }
+
+                        let thumbnails = await photoService.loadThumbnailsByUUIDs(uuids)
+                        print("✅ Reloaded \(thumbnails.count) thumbnails for message \(index)")
+
+                        await MainActor.run {
+                            guard index < messages.count else { return }
+
+                            var updatedMessage = messages[index]
+                            updatedMessage.photoThumbnails = uuids.map { uuid in
+                                PhotoThumbnail(uuid: uuid, image: thumbnails[uuid], description: nil)
+                            }
+                            messages[index] = updatedMessage
+                            print("✅ Updated message \(index) with \(updatedMessage.photoThumbnails?.count ?? 0) reloaded thumbnails")
+                        }
+                    }
+                }
+            }
+            print("🔄 Finished reloading thumbnails")
         }
     }
 
@@ -300,7 +393,8 @@ class AIChatViewModel: ObservableObject {
             return ConversationMessage(
                 role: roleString,
                 content: msg.content,
-                photoUUIDs: msg.photoThumbnails?.map { $0.uuid }
+                photoUUIDs: msg.photoThumbnails?.map { $0.uuid },
+                toolName: msg.toolName
             )
         }
 
@@ -405,19 +499,17 @@ class AIChatViewModel: ObservableObject {
             var properties: [String: OllamaService.Tool.PropertySchema] = [:]
             var required: [String] = []
 
-            if let inputSchema = tool.inputSchema as? [String: Any],
-               let props = inputSchema["properties"] as? [String: [String: Any]],
-               let req = inputSchema["required"] as? [String] {
-
-                for (key, value) in props {
-                    if let type = value["type"] as? String,
-                       let description = value["description"] as? String {
-                        properties[key] = OllamaService.Tool.PropertySchema(
-                            type: type,
-                            description: description
-                        )
-                    }
+            // Extract from typed InputSchema struct
+            if let props = tool.inputSchema.properties {
+                for (key, prop) in props {
+                    properties[key] = OllamaService.Tool.PropertySchema(
+                        type: prop.type,
+                        description: prop.description ?? ""
+                    )
                 }
+            }
+
+            if let req = tool.inputSchema.required {
                 required = req
             }
 
