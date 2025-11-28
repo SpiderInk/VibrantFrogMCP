@@ -10,9 +10,9 @@ import SwiftUI
 
 enum NavigationItem: String, CaseIterable, Identifiable {
     case aiChat = "AI Chat"
-    case chat = "Simple Chat"
+    case conversations = "Conversations"
     case mcp = "MCP Server"
-    case search = "Search"
+    case toolCalling = "Tool Calling"
     case indexing = "Indexing"
     case settings = "Settings"
 
@@ -21,9 +21,9 @@ enum NavigationItem: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .aiChat: return "brain"
-        case .chat: return "message"
+        case .conversations: return "bubble.left.and.bubble.right"
         case .mcp: return "network"
-        case .search: return "magnifyingglass"
+        case .toolCalling: return "terminal"
         case .indexing: return "arrow.triangle.2.circlepath"
         case .settings: return "gear"
         }
@@ -34,6 +34,7 @@ struct ContentView: View {
     @EnvironmentObject var photoLibraryService: PhotoLibraryService
     @EnvironmentObject var llmService: LLMService
     @StateObject private var mcpClient = MCPClientHTTP()
+    @StateObject private var conversationStore = ConversationStore()
     @State private var selectedItem: NavigationItem? = .aiChat
 
     var body: some View {
@@ -50,14 +51,15 @@ struct ContentView: View {
             case .aiChat:
                 AIChatView()
                     .environmentObject(mcpClient)
-            case .chat:
-                ChatView()
-                    .environmentObject(mcpClient)
+                    .environmentObject(conversationStore)
+            case .conversations:
+                ConversationHistoryView()
+                    .environmentObject(conversationStore)
             case .mcp:
-                MCPTestView()
+                MCPManagementView()
+            case .toolCalling:
+                DirectToolCallView()
                     .environmentObject(mcpClient)
-            case .search:
-                PhotoSearchView()
             case .indexing:
                 IndexingView()
             case .settings:

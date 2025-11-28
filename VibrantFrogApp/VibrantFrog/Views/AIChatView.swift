@@ -13,6 +13,7 @@ struct AIChatView: View {
     @StateObject private var viewModel = AIChatViewModel()
     @StateObject private var photoService = PhotoLibraryService()
     @EnvironmentObject var mcpClient: MCPClientHTTP
+    @EnvironmentObject var conversationStore: ConversationStore
     @State private var inputText: String = ""
     @State private var isProcessing: Bool = false
 
@@ -25,11 +26,27 @@ struct AIChatView: View {
         VStack(spacing: 0) {
             // Header
             HStack {
-                Text("AI Chat")
-                    .font(.title2)
-                    .fontWeight(.semibold)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("AI Chat")
+                        .font(.title2)
+                        .fontWeight(.semibold)
+
+                    if let conversation = conversationStore.currentConversation {
+                        Text(conversation.title)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
 
                 Spacer()
+
+                // New conversation button
+                Button(action: {
+                    viewModel.startNewConversation(store: conversationStore)
+                }) {
+                    Label("New", systemImage: "plus.circle")
+                }
+                .buttonStyle(.borderless)
 
                 // Model selector
                 if viewModel.ollamaService.isAvailable {
@@ -117,7 +134,7 @@ struct AIChatView: View {
         }
         .frame(minWidth: 600, minHeight: 400)
         .onAppear {
-            viewModel.setup(mcpClient: mcpClient, photoService: photoService)
+            viewModel.setup(mcpClient: mcpClient, photoService: photoService, conversationStore: conversationStore)
 
             // Request photo library access if needed
             if !photoService.isAuthorized {
@@ -163,6 +180,7 @@ class AIChatViewModel: ObservableObject {
 
     private var mcpClient: MCPClientHTTP?
     private var photoService: PhotoLibraryService?
+    private var conversationStore: ConversationStore?
     private var conversationHistory: [OllamaService.ChatMessage] = []
     private var cancellables = Set<AnyCancellable>()
 
@@ -173,13 +191,56 @@ class AIChatViewModel: ObservableObject {
         }.store(in: &cancellables)
     }
 
-    func setup(mcpClient: MCPClientHTTP, photoService: PhotoLibraryService) {
+    func setup(mcpClient: MCPClientHTTP, photoService: PhotoLibraryService, conversationStore: ConversationStore) {
         self.mcpClient = mcpClient
         self.photoService = photoService
+        self.conversationStore = conversationStore
 
+        // Load current conversation or create new one
+        if let currentConv = conversationStore.currentConversation {
+            loadConversation(currentConv)
+        } else {
+            startNewConversation(store: conversationStore)
+        }
+    }
+
+    func startNewConversation(store: ConversationStore) {
+        let newConv = store.createNewConversation(model: ollamaService.selectedModel)
+        conversationHistory = []
+        messages = []
+        setupSystemMessage()
+    }
+
+    func loadConversation(_ conversation: Conversation) {
+        // Convert stored messages to display format
+        messages = conversation.messages.compactMap { msg -> AIChatMessage? in
+            guard let role = AIChatMessage.MessageRole(from: msg.role) else { return nil }
+            return AIChatMessage(
+                role: role,
+                content: msg.content,
+                timestamp: msg.timestamp,
+                photoThumbnails: nil // TODO: Re-load thumbnails if needed
+            )
+        }
+
+        // Rebuild conversation history for Ollama
+        conversationHistory = conversation.messages.map { msg in
+            OllamaService.ChatMessage(role: msg.role, content: msg.content)
+        }
+
+        // Set model
+        ollamaService.selectedModel = conversation.selectedModel
+
+        // If no system message, add one
+        if conversationHistory.isEmpty || conversationHistory.first?.role != "system" {
+            setupSystemMessage()
+        }
+    }
+
+    private func setupSystemMessage() {
         // Add system instruction for tool use
-        if conversationHistory.isEmpty {
-            conversationHistory.append(OllamaService.ChatMessage(
+        if conversationHistory.isEmpty || conversationHistory.first?.role != "system" {
+            conversationHistory.insert(OllamaService.ChatMessage(
                 role: "system",
                 content: """
                 You are a helpful AI assistant with access to tools via function calling.
@@ -208,7 +269,7 @@ class AIChatViewModel: ObservableObject {
 
                 Remember: USE FUNCTION CALLING, not text descriptions of function calls.
                 """
-            ))
+            ), at: 0)
         }
 
         // Add welcome message
@@ -228,6 +289,23 @@ class AIChatViewModel: ObservableObject {
                 timestamp: Date()
             ))
         }
+    }
+
+    private func saveCurrentConversation() {
+        guard let store = conversationStore, var current = store.currentConversation else { return }
+
+        // Convert display messages back to storable format
+        current.messages = messages.compactMap { msg -> ConversationMessage? in
+            let roleString = msg.role.toString()
+            return ConversationMessage(
+                role: roleString,
+                content: msg.content,
+                photoUUIDs: msg.photoThumbnails?.map { $0.uuid }
+            )
+        }
+
+        current.selectedModel = ollamaService.selectedModel
+        store.updateCurrentConversation(current)
     }
 
     func sendMessage(_ text: String) async {
@@ -308,6 +386,9 @@ class AIChatViewModel: ObservableObject {
                 timestamp: Date()
             ))
         }
+
+        // Save conversation after every message
+        saveCurrentConversation()
     }
 
     private func getMCPTools() async throws -> [OllamaService.Tool] {
@@ -577,6 +658,25 @@ struct AIChatMessage: Identifiable, Equatable {
         case assistant
         case system
         case tool
+
+        init?(from string: String) {
+            switch string {
+            case "user": self = .user
+            case "assistant": self = .assistant
+            case "system": self = .system
+            case "tool": self = .tool
+            default: return nil
+            }
+        }
+
+        func toString() -> String {
+            switch self {
+            case .user: return "user"
+            case .assistant: return "assistant"
+            case .system: return "system"
+            case .tool: return "tool"
+            }
+        }
     }
 
     static func == (lhs: AIChatMessage, rhs: AIChatMessage) -> Bool {

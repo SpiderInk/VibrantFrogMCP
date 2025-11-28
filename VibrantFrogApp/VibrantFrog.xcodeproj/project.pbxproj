@@ -28,6 +28,12 @@
 		719464D32ED79D0300F260DE /* AIChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 719464D22ED79D0300F260DE /* AIChatView.swift */; };
 		719464DB2ED7A11C00F260DE /* OllamaService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 719464DA2ED7A11C00F260DE /* OllamaService.swift */; };
 		719464DC2ED7A11C00F260DE /* MCPServerRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 719464D92ED7A11C00F260DE /* MCPServerRegistry.swift */; };
+		719464E22ED92E0400F260DE /* Conversation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 719464E12ED92E0400F260DE /* Conversation.swift */; };
+		719464E62ED9395100F260DE /* ConversationHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 719464E52ED9395100F260DE /* ConversationHistoryView.swift */; };
+		719464EA2ED9396A00F260DE /* MCPManagementView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 719464E92ED9396A00F260DE /* MCPManagementView.swift */; };
+		719464EB2ED9396A00F260DE /* DynamicToolFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 719464E82ED9396A00F260DE /* DynamicToolFormView.swift */; };
+		719464EC2ED9396A00F260DE /* DirectToolCallView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 719464E72ED9396A00F260DE /* DirectToolCallView.swift */; };
+		719464EE2ED9398600F260DE /* ConversationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 719464ED2ED9398600F260DE /* ConversationStore.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -68,6 +74,12 @@
 		719464D22ED79D0300F260DE /* AIChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIChatView.swift; sourceTree = "<group>"; };
 		719464D92ED7A11C00F260DE /* MCPServerRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPServerRegistry.swift; sourceTree = "<group>"; };
 		719464DA2ED7A11C00F260DE /* OllamaService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OllamaService.swift; sourceTree = "<group>"; };
+		719464E12ED92E0400F260DE /* Conversation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Conversation.swift; sourceTree = "<group>"; };
+		719464E52ED9395100F260DE /* ConversationHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationHistoryView.swift; sourceTree = "<group>"; };
+		719464E72ED9396A00F260DE /* DirectToolCallView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectToolCallView.swift; sourceTree = "<group>"; };
+		719464E82ED9396A00F260DE /* DynamicToolFormView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DynamicToolFormView.swift; sourceTree = "<group>"; };
+		719464E92ED9396A00F260DE /* MCPManagementView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPManagementView.swift; sourceTree = "<group>"; };
+		719464ED2ED9398600F260DE /* ConversationStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationStore.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -117,6 +129,10 @@
 		1A0000050000000000000004 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				719464E72ED9396A00F260DE /* DirectToolCallView.swift */,
+				719464E82ED9396A00F260DE /* DynamicToolFormView.swift */,
+				719464E92ED9396A00F260DE /* MCPManagementView.swift */,
+				719464E52ED9395100F260DE /* ConversationHistoryView.swift */,
 				719464D22ED79D0300F260DE /* AIChatView.swift */,
 				719464D02ED69BDD00F260DE /* ChatView.swift */,
 				1A0000020000000000000018 /* MCPTestView.swift */,
@@ -131,6 +147,7 @@
 		1A0000050000000000000005 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				719464ED2ED9398600F260DE /* ConversationStore.swift */,
 				719464D92ED7A11C00F260DE /* MCPServerRegistry.swift */,
 				719464DA2ED7A11C00F260DE /* OllamaService.swift */,
 				1A0000020000000000000004 /* PhotoLibraryService.swift */,
@@ -154,6 +171,7 @@
 		1A0000050000000000000007 /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				719464E12ED92E0400F260DE /* Conversation.swift */,
 				1A0000020000000000000010 /* Photo.swift */,
 			);
 			path = Models;
@@ -236,15 +254,21 @@
 				1A0000010000000000000005 /* LLMService.swift in Sources */,
 				1A0000010000000000000006 /* PhotoSearchView.swift in Sources */,
 				1A0000010000000000000007 /* PhotoGridView.swift in Sources */,
+				719464EE2ED9398600F260DE /* ConversationStore.swift in Sources */,
 				1A0000010000000000000008 /* SettingsView.swift in Sources */,
 				719464DB2ED7A11C00F260DE /* OllamaService.swift in Sources */,
 				719464DC2ED7A11C00F260DE /* MCPServerRegistry.swift in Sources */,
+				719464EA2ED9396A00F260DE /* MCPManagementView.swift in Sources */,
+				719464EB2ED9396A00F260DE /* DynamicToolFormView.swift in Sources */,
+				719464EC2ED9396A00F260DE /* DirectToolCallView.swift in Sources */,
 				719464D12ED69BDD00F260DE /* ChatView.swift in Sources */,
+				719464E62ED9395100F260DE /* ConversationHistoryView.swift in Sources */,
 				1A0000010000000000000009 /* IndexingView.swift in Sources */,
 				1A0000010000000000000010 /* Photo.swift in Sources */,
 				1A0000010000000000000011 /* EmbeddingStore.swift in Sources */,
 				1A0000010000000000000016 /* LibLlama.swift in Sources */,
 				1A0000010000000000000017 /* MCPClient.swift in Sources */,
+				719464E22ED92E0400F260DE /* Conversation.swift in Sources */,
 				1A0000010000000000000018 /* MCPTestView.swift in Sources */,
 				1A0000010000000000000019 /* MCPClientHTTP.swift in Sources */,
 			);
