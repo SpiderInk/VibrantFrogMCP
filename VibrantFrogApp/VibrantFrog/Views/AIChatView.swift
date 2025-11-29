@@ -87,7 +87,7 @@ struct AIChatView: View {
                     LazyVStack(alignment: .leading, spacing: 16) {
                         ForEach(viewModel.messages) { message in
                             MessageView(message: message)
-                                .id(message.id)
+                                .id("\(message.id)-\(message.photoThumbnails?.count ?? 0)")
                         }
 
                         if isProcessing {
@@ -100,6 +100,7 @@ struct AIChatView: View {
                             .padding()
                         }
                     }
+                    .id(viewModel.thumbnailsVersion)  // Force entire stack to rebuild when thumbnails change
                     .padding()
                 }
                 .onChange(of: viewModel.messages.count) { _ in
@@ -180,6 +181,7 @@ struct AIChatView: View {
 class AIChatViewModel: ObservableObject {
     @Published var messages: [AIChatMessage] = []
     @Published var ollamaService = OllamaService()
+    @Published var thumbnailsVersion: Int = 0  // Increment this to force view refresh
 
     private var mcpClient: MCPClientHTTP?
     private var photoService: PhotoLibraryService?
@@ -275,7 +277,16 @@ class AIChatViewModel: ObservableObject {
                         updatedMessage.photoThumbnails = uuids.map { uuid in
                             PhotoThumbnail(uuid: uuid, image: thumbnails[uuid], description: nil)
                         }
-                        messages[index] = updatedMessage
+
+                        // Force SwiftUI to detect the change by replacing the entire array
+                        var newMessages = messages
+                        newMessages[index] = updatedMessage
+
+                        // Explicitly notify SwiftUI of the change
+                        objectWillChange.send()
+                        messages = newMessages
+                        thumbnailsVersion += 1  // Force view refresh
+
                         print("✅ Updated message \(index) with \(updatedMessage.photoThumbnails?.count ?? 0) thumbnails")
                     }
                 }
@@ -293,36 +304,68 @@ class AIChatViewModel: ObservableObject {
             return
         }
 
+        guard let photoService = photoService else {
+            print("⚠️ PhotoService not available for thumbnail reload")
+            return
+        }
+
+        print("📋 Current conversation has \(currentConv.messages.count) messages")
+        print("📋 Display messages array has \(messages.count) items")
+
         // Check if any messages have photoUUIDs but missing thumbnails
         Task {
             for (index, msg) in currentConv.messages.enumerated() {
                 if let uuids = msg.photoUUIDs, !uuids.isEmpty {
-                    // Check if this message already has thumbnails loaded
-                    guard index < messages.count else { continue }
+                    print("📸 Message \(index) has \(uuids.count) photo UUIDs")
 
-                    let hasLoadedThumbnails = messages[index].photoThumbnails?.allSatisfy { $0.image != nil } ?? false
+                    // Check if this message already has thumbnails loaded
+                    guard index < messages.count else {
+                        print("⚠️ Message index \(index) out of bounds, messages.count = \(messages.count)")
+                        continue
+                    }
+
+                    let currentThumbnails = messages[index].photoThumbnails
+                    let hasLoadedThumbnails = currentThumbnails?.allSatisfy { $0.image != nil } ?? false
+
+                    print("📸 Message \(index): has \(currentThumbnails?.count ?? 0) thumbnails, all loaded: \(hasLoadedThumbnails)")
 
                     if !hasLoadedThumbnails {
-                        print("📸 Reloading thumbnails for message \(index) with \(uuids.count) photo UUIDs")
-
-                        guard let photoService = photoService else {
-                            print("⚠️ PhotoService not available")
-                            continue
-                        }
+                        print("📸 Loading thumbnails for message \(index) with \(uuids.count) photo UUIDs")
 
                         let thumbnails = await photoService.loadThumbnailsByUUIDs(uuids)
-                        print("✅ Reloaded \(thumbnails.count) thumbnails for message \(index)")
+                        print("✅ Loaded \(thumbnails.count) thumbnails for message \(index)")
 
                         await MainActor.run {
-                            guard index < messages.count else { return }
+                            guard index < messages.count else {
+                                print("⚠️ Index out of bounds after loading")
+                                return
+                            }
+
+                            print("🔍 Before update - message[\(index)].id = \(messages[index].id)")
+                            print("🔍 Before update - photoThumbnails count = \(messages[index].photoThumbnails?.count ?? 0)")
 
                             var updatedMessage = messages[index]
                             updatedMessage.photoThumbnails = uuids.map { uuid in
                                 PhotoThumbnail(uuid: uuid, image: thumbnails[uuid], description: nil)
                             }
-                            messages[index] = updatedMessage
-                            print("✅ Updated message \(index) with \(updatedMessage.photoThumbnails?.count ?? 0) reloaded thumbnails")
+
+                            print("🔍 After creating updated message - photoThumbnails count = \(updatedMessage.photoThumbnails?.count ?? 0)")
+                            print("🔍 Thumbnail images loaded: \(updatedMessage.photoThumbnails?.filter { $0.image != nil }.count ?? 0)/\(updatedMessage.photoThumbnails?.count ?? 0)")
+
+                            // Force SwiftUI to detect the change by replacing the entire array
+                            var newMessages = messages
+                            newMessages[index] = updatedMessage
+
+                            // Explicitly notify SwiftUI of the change
+                            objectWillChange.send()
+                            messages = newMessages
+                            thumbnailsVersion += 1  // Force view refresh
+
+                            print("✅ Updated message \(index) with \(updatedMessage.photoThumbnails?.count ?? 0) thumbnails (images: \(updatedMessage.photoThumbnails?.filter { $0.image != nil }.count ?? 0))")
+                            print("🔍 After messages array replacement - messages[\(index)].photoThumbnails count = \(messages[index].photoThumbnails?.count ?? 0)")
                         }
+                    } else {
+                        print("ℹ️ Message \(index) already has all thumbnails loaded, skipping")
                     }
                 }
             }
@@ -813,6 +856,7 @@ struct MessageView: View {
 
                 // Photo thumbnails grid
                 if let thumbnails = message.photoThumbnails, !thumbnails.isEmpty {
+                    let _ = print("🎨 MessageView: Rendering \(thumbnails.count) thumbnails for message")
                     LazyVGrid(columns: [
                         GridItem(.adaptive(minimum: 150, maximum: 200))
                     ], spacing: 12) {
