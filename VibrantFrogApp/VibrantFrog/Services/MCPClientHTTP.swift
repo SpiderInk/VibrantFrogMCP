@@ -35,18 +35,34 @@ class MCPClientHTTP: ObservableObject {
         serverScriptPath: String = "/Users/tpiazza/git/VibrantFrogMCP/vibrant_frog_mcp.py",
         mcpEndpointPath: String? = nil
     ) {
-        self.serverURL = serverURL
-        // Use custom endpoint path if provided, otherwise default to /mcp
-        if let customPath = mcpEndpointPath {
-            // If the custom path is empty, use the base URL directly
-            if customPath.isEmpty {
-                self.mcpEndpoint = serverURL
-            } else {
-                self.mcpEndpoint = serverURL.appendingPathComponent(customPath)
-            }
+        // Check if serverURL already contains a path (e.g., http://127.0.0.1:5050/mcp)
+        // If it does, use it as-is. Otherwise, append the endpoint path.
+        let hasPath = !serverURL.path.isEmpty && serverURL.path != "/"
+
+        if hasPath {
+            // URL already includes the endpoint path - use it directly
+            self.mcpEndpoint = serverURL
+            // Extract base URL for health checks
+            var components = URLComponents(url: serverURL, resolvingAgainstBaseURL: false)
+            components?.path = ""
+            components?.query = nil
+            components?.fragment = nil
+            self.serverURL = components?.url ?? serverURL
         } else {
-            self.mcpEndpoint = serverURL.appendingPathComponent("mcp")
+            // URL is just host:port - append endpoint path
+            self.serverURL = serverURL
+            if let customPath = mcpEndpointPath {
+                // If the custom path is empty, use the base URL directly
+                if customPath.isEmpty {
+                    self.mcpEndpoint = serverURL
+                } else {
+                    self.mcpEndpoint = serverURL.appendingPathComponent(customPath)
+                }
+            } else {
+                self.mcpEndpoint = serverURL.appendingPathComponent("mcp")
+            }
         }
+
         self.pythonPath = pythonPath
         self.serverScriptPath = serverScriptPath
 
