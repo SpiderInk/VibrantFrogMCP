@@ -17,7 +17,7 @@ class OllamaService: ObservableObject {
 
     // Models that support tool calling (function calling)
     // llama3.2 is generally better at actually calling tools vs mistral
-    let toolSupportedModels = ["mistral", "llama3.1", "llama3.2", "qwen2.5"]
+    let toolSupportedModels = ["mistral", "llama3.1", "llama3.2", "qwen2.5", "mistral-nemo:latest"]
 
     private let baseURL = URL(string: "http://127.0.0.1:11434")!
     private let session = URLSession.shared
