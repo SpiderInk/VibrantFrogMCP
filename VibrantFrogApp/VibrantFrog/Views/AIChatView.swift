@@ -12,10 +12,14 @@ import Combine
 struct AIChatView: View {
     @StateObject private var viewModel = AIChatViewModel()
     @StateObject private var photoService = PhotoLibraryService()
+    @StateObject private var promptStore = PromptTemplateStore()
+    @StateObject private var mcpRegistry = MCPServerRegistry()
     @EnvironmentObject var mcpClient: MCPClientHTTP
     @EnvironmentObject var conversationStore: ConversationStore
     @State private var inputText: String = ""
     @State private var isProcessing: Bool = false
+    @State private var selectedPromptTemplate: PromptTemplate?
+    @State private var selectedMCPServer: MCPServer?
 
     // Observe ollamaService directly to get UI updates
     private var ollamaService: OllamaService {
@@ -25,57 +29,111 @@ struct AIChatView: View {
     var body: some View {
         VStack(spacing: 0) {
             // Header
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("AI Chat")
-                        .font(.title2)
-                        .fontWeight(.semibold)
+            VStack(spacing: 8) {
+                // First row - Title and actions
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("AI Chat")
+                            .font(.title2)
+                            .fontWeight(.semibold)
 
-                    if let conversation = conversationStore.currentConversation {
-                        Text(conversation.title)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                Spacer()
-
-                // New conversation button
-                Button(action: {
-                    viewModel.startNewConversation(store: conversationStore)
-                }) {
-                    Label("New", systemImage: "plus.circle")
-                }
-                .buttonStyle(.borderless)
-
-                // Model selector
-                if viewModel.ollamaService.isAvailable {
-                    Picker("Model", selection: $viewModel.ollamaService.selectedModel) {
-                        ForEach(viewModel.ollamaService.availableModels) { model in
-                            Text(model.name).tag(model.name)
+                        if let conversation = conversationStore.currentConversation {
+                            Text(conversation.title)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
                     }
-                    .frame(width: 200)
-                } else {
-                    Text("Ollama not available")
-                        .foregroundStyle(.red)
+
+                    Spacer()
+
+                    // New conversation button
+                    Button(action: {
+                        viewModel.startNewConversation(store: conversationStore)
+                    }) {
+                        Label("New", systemImage: "plus.circle")
+                    }
+                    .buttonStyle(.borderless)
                 }
 
-                // MCP Connection Status
-                Circle()
-                    .fill(mcpClient.isConnected ? Color.green : Color.red)
-                    .frame(width: 8, height: 8)
-                Text(mcpClient.isConnected ? "MCP Connected" : "MCP Disconnected")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                if !mcpClient.isConnected {
-                    Button("Connect MCP") {
-                        Task {
-                            try? await mcpClient.connect()
+                // Second row - Selectors
+                HStack(spacing: 12) {
+                    // Prompt Template selector
+                    Menu {
+                        ForEach(promptStore.templates) { template in
+                            Button(action: {
+                                selectedPromptTemplate = template
+                                viewModel.setPromptTemplate(template)
+                            }) {
+                                VStack(alignment: .leading) {
+                                    Text(template.name)
+                                    Text(template.lastEdited.formatted(date: .abbreviated, time: .shortened))
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    } label: {
+                        HStack {
+                            Image(systemName: "doc.text")
+                            if let prompt = selectedPromptTemplate {
+                                Text(prompt.name)
+                            } else {
+                                Text("Select Prompt")
+                            }
+                            Image(systemName: "chevron.down")
+                                .font(.caption)
                         }
                     }
+                    .frame(width: 180)
+
+                    // MCP Server selector
+                    Menu {
+                        ForEach(mcpRegistry.servers.filter { $0.isEnabled }) { server in
+                            Button(action: {
+                                selectedMCPServer = server
+                                viewModel.setMCPServer(server)
+                            }) {
+                                Text(server.name)
+                            }
+                        }
+                    } label: {
+                        HStack {
+                            Image(systemName: "network")
+                            if let server = selectedMCPServer {
+                                Text(server.name)
+                            } else {
+                                Text("Select MCP Server")
+                            }
+                            Image(systemName: "chevron.down")
+                                .font(.caption)
+                        }
+                    }
+                    .frame(width: 180)
+
+                    // Model selector
+                    if viewModel.ollamaService.isAvailable {
+                        Picker("Model", selection: $viewModel.ollamaService.selectedModel) {
+                            ForEach(viewModel.ollamaService.availableModels) { model in
+                                Text(model.name).tag(model.name)
+                            }
+                        }
+                        .frame(width: 200)
+                    } else {
+                        Text("Ollama not available")
+                            .foregroundStyle(.red)
+                    }
+
+                    Spacer()
+
+                    // MCP Connection Status
+                    Circle()
+                        .fill(mcpClient.isConnected ? Color.green : Color.red)
+                        .frame(width: 8, height: 8)
+                    Text(mcpClient.isConnected ? "Connected" : "Disconnected")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
+                .padding(.horizontal, 8)
             }
             .padding()
 
@@ -189,6 +247,11 @@ class AIChatViewModel: ObservableObject {
     private var conversationHistory: [OllamaService.ChatMessage] = []
     private var cancellables = Set<AnyCancellable>()
     private var isSetup = false
+
+    // Prompt template and MCP server selection
+    private var currentPromptTemplate: PromptTemplate?
+    private var currentMCPServer: MCPServer?
+    private var availableTools: [String] = []
 
     init() {
         // Forward changes from ollamaService to this ViewModel
@@ -373,38 +436,69 @@ class AIChatViewModel: ObservableObject {
         }
     }
 
+    func setPromptTemplate(_ template: PromptTemplate) {
+        currentPromptTemplate = template
+        // Regenerate system message with new template
+        regenerateSystemMessage()
+    }
+
+    func setMCPServer(_ server: MCPServer) {
+        currentMCPServer = server
+        // Fetch tools from this server
+        Task {
+            do {
+                let client = MCPClientHTTP(serverURL: URL(string: server.url)!)
+                try await client.connect()
+                let tools = try await client.getTools()
+                await MainActor.run {
+                    self.availableTools = tools.map { tool in
+                        let params = tool.inputSchema.properties?.keys.joined(separator: ", ") ?? ""
+                        return "- \(tool.name)(\(params))"
+                    }
+                    // Regenerate system message with new tools
+                    regenerateSystemMessage()
+                }
+            } catch {
+                print("❌ Failed to fetch tools from \(server.name): \(error)")
+            }
+        }
+    }
+
+    private func regenerateSystemMessage() {
+        // Remove old system message
+        if !conversationHistory.isEmpty && conversationHistory.first?.role == "system" {
+            conversationHistory.removeFirst()
+        }
+
+        // Generate new system message using template
+        let systemContent: String
+        if let template = currentPromptTemplate {
+            systemContent = template.render(
+                withTools: availableTools,
+                mcpServerName: currentMCPServer?.name
+            )
+        } else {
+            // Fallback to default
+            systemContent = createDefaultSystemPrompt()
+        }
+
+        conversationHistory.insert(OllamaService.ChatMessage(
+            role: "system",
+            content: systemContent
+        ), at: 0)
+    }
+
     private func setupSystemMessage() {
         // Add system instruction for tool use
         if conversationHistory.isEmpty || conversationHistory.first?.role != "system" {
+            let systemContent = currentPromptTemplate?.render(
+                withTools: availableTools,
+                mcpServerName: currentMCPServer?.name
+            ) ?? createDefaultSystemPrompt()
+
             conversationHistory.insert(OllamaService.ChatMessage(
                 role: "system",
-                content: """
-                You are a helpful AI assistant with access to tools via function calling.
-
-                ABSOLUTELY CRITICAL - YOU MUST FOLLOW THESE RULES:
-                1. When users ask about photos, YOU MUST USE FUNCTION CALLING to invoke the tools
-                2. DO NOT write JSON or describe function calls - USE THE ACTUAL FUNCTION CALLING MECHANISM
-                3. DO NOT output text like {"name":"search_photos",...} - that is WRONG
-                4. DO NOT explain what you will do - JUST DO IT by calling the function
-                5. NEVER say "I will search" or "Let me find" - CALL THE FUNCTION IMMEDIATELY
-
-                You have these tools available:
-                - search_photos(query: string, n_results: int) - Search for photos
-                - create_album_from_search(name: string, query: string) - Create album from search
-                - list_albums() - List all albums
-
-                EXAMPLE OF CORRECT BEHAVIOR:
-                User: "Show me beach photos"
-                Assistant: [CALLS search_photos function with query="beach", n_results=10]
-                [After getting results]
-                Assistant: "I found 10 beach photos for you!"
-
-                EXAMPLE OF WRONG BEHAVIOR:
-                User: "Show me beach photos"
-                Assistant: {"name":"search_photos","parameters":{"query":"beach"}} <- THIS IS WRONG!
-
-                Remember: USE FUNCTION CALLING, not text descriptions of function calls.
-                """
+                content: systemContent
             ), at: 0)
         }
 
@@ -425,6 +519,34 @@ class AIChatViewModel: ObservableObject {
                 timestamp: Date()
             ))
         }
+    }
+
+    private func createDefaultSystemPrompt() -> String {
+        return """
+        You are a helpful AI assistant with access to tools via function calling.
+
+        ABSOLUTELY CRITICAL - YOU MUST FOLLOW THESE RULES:
+        1. When users ask about photos, YOU MUST USE FUNCTION CALLING to invoke the tools
+        2. DO NOT write JSON or describe function calls - USE THE ACTUAL FUNCTION CALLING MECHANISM
+        3. DO NOT output text like {"name":"search_photos",...} - that is WRONG
+        4. DO NOT explain what you will do - JUST DO IT by calling the function
+        5. NEVER say "I will search" or "Let me find" - CALL THE FUNCTION IMMEDIATELY
+
+        You have these tools available:
+        \(availableTools.joined(separator: "\n"))
+
+        EXAMPLE OF CORRECT BEHAVIOR:
+        User: "Show me beach photos"
+        Assistant: [CALLS search_photos function with query="beach", n_results=10]
+        [After getting results]
+        Assistant: "I found 10 beach photos for you!"
+
+        EXAMPLE OF WRONG BEHAVIOR:
+        User: "Show me beach photos"
+        Assistant: {"name":"search_photos","parameters":{"query":"beach"}} <- THIS IS WRONG!
+
+        Remember: USE FUNCTION CALLING, not text descriptions of function calls.
+        """
     }
 
     private func saveCurrentConversation() {

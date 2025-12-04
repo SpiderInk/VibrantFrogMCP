@@ -11,6 +11,7 @@ import SwiftUI
 enum NavigationItem: String, CaseIterable, Identifiable {
     case aiChat = "AI Chat"
     case conversations = "Conversations"
+    case prompts = "Prompts"
     case mcp = "MCP Server"
     case toolCalling = "Tool Calling"
     case indexing = "Indexing"
@@ -22,6 +23,7 @@ enum NavigationItem: String, CaseIterable, Identifiable {
         switch self {
         case .aiChat: return "brain"
         case .conversations: return "bubble.left.and.bubble.right"
+        case .prompts: return "doc.text"
         case .mcp: return "network"
         case .toolCalling: return "terminal"
         case .indexing: return "arrow.triangle.2.circlepath"
@@ -54,6 +56,8 @@ struct ContentView: View {
             case .conversations:
                 ConversationHistoryView()
                     .environmentObject(conversationStore)
+            case .prompts:
+                PromptTemplatesView()
             case .mcp:
                 MCPManagementView()
             case .toolCalling:
