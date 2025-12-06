@@ -195,6 +195,21 @@ struct AIChatView: View {
         .onAppear {
             viewModel.setup(mcpClient: mcpClient, photoService: photoService, conversationStore: conversationStore)
 
+            // Load saved selections and restore UI state (only if not already set)
+            if selectedPromptTemplate == nil,
+               let savedPromptID = viewModel.getSavedPromptTemplateID(),
+               let template = promptStore.templates.first(where: { $0.id == savedPromptID }) {
+                selectedPromptTemplate = template
+                viewModel.setPromptTemplate(template)
+            }
+
+            if selectedMCPServer == nil,
+               let savedServerID = viewModel.getSavedMCPServerID(),
+               let server = mcpRegistry.servers.first(where: { $0.id == savedServerID }) {
+                selectedMCPServer = server
+                viewModel.setMCPServer(server)
+            }
+
             // Reload thumbnails when view appears (in case they were lost on tab switch)
             viewModel.reloadThumbnailsIfNeeded()
 
@@ -206,15 +221,32 @@ struct AIChatView: View {
             Task {
                 await viewModel.ollamaService.checkAvailability()
 
+                // NOW load the saved model AFTER Ollama is ready and models are fetched
+                viewModel.loadSavedModel()
+
                 // Auto-connect to MCP server if not already connected
                 if !mcpClient.isConnected {
                     do {
                         try await mcpClient.connect()
                         print("✅ AIChatView: Auto-connected to MCP server")
+
+                        // CRITICAL FIX: After MCP connects, regenerate system message with tools
+                        // This ensures the first chat request includes tool descriptions in the system prompt
+                        await viewModel.refreshToolsAndRegenerateSystemMessage(mcpClient: mcpClient)
                     } catch {
                         print("❌ AIChatView: Failed to connect to MCP server: \(error)")
                     }
                 }
+            }
+        }
+        .onChange(of: viewModel.ollamaService.selectedModel) { newModel in
+            print("🔄 Model changed to: \(newModel), setup complete: \(viewModel.isSetupComplete)")
+            // Save model selection when it changes (only if setup is complete)
+            if viewModel.isSetupComplete {
+                UserDefaults.standard.set(newModel, forKey: "selectedOllamaModel")
+                print("💾 Saved model selection: \(newModel)")
+            } else {
+                print("⏳ Not saving yet - setup not complete")
             }
         }
     }
@@ -251,7 +283,18 @@ class AIChatViewModel: ObservableObject {
     // Prompt template and MCP server selection
     private var currentPromptTemplate: PromptTemplate?
     private var currentMCPServer: MCPServer?
+    private var currentMCPClient: MCPClientHTTP?  // MCP client for selected server
     private var availableTools: [String] = []
+
+    // Persistence keys
+    private let selectedPromptTemplateKey = "selectedPromptTemplateID"
+    private let selectedMCPServerKey = "selectedMCPServerID"
+    private let selectedModelKey = "selectedOllamaModel"
+
+    // Public property to check if setup is complete
+    var isSetupComplete: Bool {
+        return isSetup
+    }
 
     init() {
         // Forward changes from ollamaService to this ViewModel
@@ -267,7 +310,6 @@ class AIChatViewModel: ObservableObject {
             return
         }
 
-        isSetup = true
         self.mcpClient = mcpClient
         self.photoService = photoService
         self.conversationStore = conversationStore
@@ -279,10 +321,98 @@ class AIChatViewModel: ObservableObject {
         } else {
             startNewConversation(store: conversationStore)
         }
+
+        // Mark setup as complete AFTER services are assigned but BEFORE model is loaded
+        // This ensures onChange handlers know we're ready, but model loading happens after Ollama is available
+        isSetup = true
+        print("✅ AIChatViewModel: Setup complete, ready to load model")
+    }
+
+    func loadSavedModel() {
+        // Load saved model - should be called AFTER Ollama availability check completes
+        if let savedModel = UserDefaults.standard.string(forKey: selectedModelKey) {
+            // Verify the saved model is actually in the available models list
+            let modelExists = ollamaService.availableModels.contains { $0.name == savedModel }
+
+            if modelExists {
+                print("📥 Loading saved model: \(savedModel) (verified in available models)")
+
+                // CRITICAL FIX: We need to FORCE the Picker binding to update by toggling the value
+                // Just setting the value doesn't activate the model in Ollama - we need to trigger
+                // the binding change handler by setting to a different value first, then back
+                Task { @MainActor in
+                    // Find a different model to temporarily switch to
+                    if let tempModel = ollamaService.availableModels.first(where: { $0.name != savedModel }) {
+                        print("🔄 Activating model by toggling: \(savedModel) -> \(tempModel.name) -> \(savedModel)")
+
+                        // Temporarily switch to different model
+                        ollamaService.selectedModel = tempModel.name
+
+                        // Small delay to ensure the change is processed
+                        try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+
+                        // Now switch to the actual saved model - this triggers the Picker properly
+                        ollamaService.selectedModel = savedModel
+
+                        print("✅ Model activated: \(savedModel)")
+                    } else {
+                        // Only one model available, just set it directly
+                        print("ℹ️ Only one model available, setting directly: \(savedModel)")
+                        ollamaService.selectedModel = savedModel
+                    }
+                }
+            } else {
+                print("⚠️ Saved model '\(savedModel)' not found in available models")
+                print("📋 Available models: \(ollamaService.availableModels.map { $0.name }.joined(separator: ", "))")
+
+                // Fall back to first available model or keep default
+                if let firstModel = ollamaService.availableModels.first {
+                    print("🔄 Falling back to first available model: \(firstModel.name)")
+                    ollamaService.selectedModel = firstModel.name
+                }
+            }
+        } else {
+            print("ℹ️ No saved model found, using default: \(ollamaService.selectedModel)")
+
+            // Even with default model, we need to trigger the binding
+            Task { @MainActor in
+                let defaultModel = ollamaService.selectedModel
+                if let tempModel = ollamaService.availableModels.first(where: { $0.name != defaultModel }) {
+                    print("🔄 Activating default model by toggling: \(defaultModel) -> \(tempModel.name) -> \(defaultModel)")
+                    ollamaService.selectedModel = tempModel.name
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                    ollamaService.selectedModel = defaultModel
+                    print("✅ Default model activated: \(defaultModel)")
+                }
+            }
+        }
+    }
+
+    // Keep this for backwards compatibility with other code that might call it
+    func loadSavedSelections() {
+        // This is now just for non-model selections
+        // Model is loaded separately via loadSavedModel() after Ollama is ready
+        print("ℹ️ loadSavedSelections() called (model loading now happens separately)")
+    }
+
+    func getSavedPromptTemplateID() -> UUID? {
+        guard let uuidString = UserDefaults.standard.string(forKey: selectedPromptTemplateKey),
+              let uuid = UUID(uuidString: uuidString) else {
+            return nil
+        }
+        return uuid
+    }
+
+    func getSavedMCPServerID() -> UUID? {
+        guard let uuidString = UserDefaults.standard.string(forKey: selectedMCPServerKey),
+              let uuid = UUID(uuidString: uuidString) else {
+            return nil
+        }
+        return uuid
     }
 
     func startNewConversation(store: ConversationStore) {
-        let newConv = store.createNewConversation(model: ollamaService.selectedModel)
+        _ = store.createNewConversation(model: ollamaService.selectedModel)
         conversationHistory = []
         messages = []
         setupSystemMessage()
@@ -438,29 +568,131 @@ class AIChatViewModel: ObservableObject {
 
     func setPromptTemplate(_ template: PromptTemplate) {
         currentPromptTemplate = template
+        // Save selection to UserDefaults
+        UserDefaults.standard.set(template.id.uuidString, forKey: selectedPromptTemplateKey)
         // Regenerate system message with new template
         regenerateSystemMessage()
     }
 
     func setMCPServer(_ server: MCPServer) {
         currentMCPServer = server
-        // Fetch tools from this server
+        // Save selection to UserDefaults
+        UserDefaults.standard.set(server.id.uuidString, forKey: selectedMCPServerKey)
+
+        // Create MCP client for this server
         Task {
             do {
-                let client = MCPClientHTTP(serverURL: URL(string: server.url)!)
+                print("🔌 Connecting to MCP server: \(server.name) at \(server.url)")
+                print("🔌 MCP endpoint path: \(server.mcpEndpointPath ?? "default(/mcp)")")
+                let client = MCPClientHTTP(
+                    serverURL: URL(string: server.url)!,
+                    mcpEndpointPath: server.mcpEndpointPath
+                )
                 try await client.connect()
                 let tools = try await client.getTools()
                 await MainActor.run {
+                    self.currentMCPClient = client
                     self.availableTools = tools.map { tool in
                         let params = tool.inputSchema.properties?.keys.joined(separator: ", ") ?? ""
                         return "- \(tool.name)(\(params))"
                     }
+                    print("✅ Successfully connected to \(server.name) with \(tools.count) tools")
                     // Regenerate system message with new tools
                     regenerateSystemMessage()
                 }
             } catch {
-                print("❌ Failed to fetch tools from \(server.name): \(error)")
+                print("❌ Failed to connect to \(server.name): \(error)")
+                await MainActor.run {
+                    // Clear the selected server's client on failure
+                    self.currentMCPClient = nil
+                    self.availableTools = []
+
+                    // Add error message to chat
+                    self.messages.append(AIChatMessage(
+                        role: .system,
+                        content: "⚠️ Failed to connect to MCP server '\(server.name)': \(error.localizedDescription)",
+                        timestamp: Date()
+                    ))
+                }
             }
+        }
+    }
+
+    func refreshToolsAndRegenerateSystemMessage(mcpClient: MCPClientHTTP) async {
+        // Fetch tools from the MCP client and update availableTools
+        do {
+            let tools = try await mcpClient.getTools()
+            await MainActor.run {
+                self.availableTools = tools.map { tool in
+                    let params = tool.inputSchema.properties?.keys.joined(separator: ", ") ?? ""
+                    return "- \(tool.name)(\(params))"
+                }
+                print("🔄 Refreshed tools: \(self.availableTools.count) tools available")
+                print("🔄 Tools list:")
+                self.availableTools.forEach { print("  \($0)") }
+
+                // Now regenerate system message with the updated tools
+                regenerateSystemMessage()
+                print("✅ System message regenerated with tools")
+            }
+
+            // CRITICAL: Prime the model with a warmup request to activate tool calling
+            // This prevents the "cold start" issue where first request gets 0 tool calls
+            await primeModelForToolCalling(mcpClient: mcpClient)
+
+        } catch {
+            print("❌ Failed to refresh tools: \(error)")
+        }
+    }
+
+    /// Sends a warmup request to prime the model for tool calling
+    /// This ensures the first real user request will successfully use tools
+    private func primeModelForToolCalling(mcpClient: MCPClientHTTP) async {
+        print("🔥 Priming model for tool calling...")
+
+        do {
+            // Get the Ollama-formatted tools
+            let ollamaTools = try await mcpClient.getTools().map { tool in
+                OllamaService.Tool(
+                    function: OllamaService.Tool.ToolFunction(
+                        name: tool.name,
+                        description: tool.description,
+                        parameters: OllamaService.Tool.ToolParameters(
+                            properties: tool.inputSchema.properties?.mapValues { prop in
+                                OllamaService.Tool.PropertySchema(
+                                    type: prop.type,
+                                    description: prop.description ?? ""
+                                )
+                            } ?? [:],
+                            required: tool.inputSchema.required ?? []
+                        )
+                    )
+                )
+            }
+
+            // Create a simple warmup conversation that won't confuse the model
+            // We use a meta-question that helps the model understand its tool-calling role
+            let warmupMessage = OllamaService.ChatMessage(
+                role: "user",
+                content: "I may ask you questions that require using the available tools. Are you ready to help?"
+            )
+
+            // Make the warmup request with tools
+            let warmupHistory = conversationHistory + [warmupMessage]
+            let response = try await ollamaService.chat(
+                messages: warmupHistory,
+                tools: ollamaTools
+            )
+
+            print("🔥 Warmup complete - model primed for tool use")
+            print("🔥 Warmup response tool calls: \(response.tool_calls?.count ?? 0)")
+
+            // Don't add the warmup exchange to the conversation history
+            // This keeps the user's chat clean and prevents confusion
+
+        } catch {
+            print("⚠️ Warmup request failed (non-critical): \(error)")
+            // Non-critical - if warmup fails, user can still chat normally
         }
     }
 
@@ -481,6 +713,8 @@ class AIChatViewModel: ObservableObject {
             // Fallback to default
             systemContent = createDefaultSystemPrompt()
         }
+
+        print("📝 Regenerated system message (length: \(systemContent.count) chars, tools count: \(availableTools.count))")
 
         conversationHistory.insert(OllamaService.ChatMessage(
             role: "system",
@@ -582,13 +816,21 @@ class AIChatViewModel: ObservableObject {
             // Define available MCP tools
             let tools = try await getMCPTools()
             print("🔧 AIChatViewModel: Fetched \(tools.count) MCP tools")
+            print("🔧 Using MCP client: \(currentMCPClient != nil ? "Custom(\(currentMCPServer?.name ?? "unknown"))" : "Default")")
             for tool in tools {
                 print("  - \(tool.function.name): \(tool.function.description)")
                 print("    Parameters: \(tool.function.parameters.properties.keys.joined(separator: ", "))")
             }
 
             // Call Ollama with tools
-            print("🤖 AIChatViewModel: Calling Ollama with \(tools.isEmpty ? "NO" : "\(tools.count)") tools")
+            print("🤖 ========================================")
+            print("🤖 Calling Ollama:")
+            print("🤖   Model: \(ollamaService.selectedModel)")
+            print("🤖   MCP Server: \(currentMCPServer?.name ?? "Default")")
+            print("🤖   Prompt Template: \(currentPromptTemplate?.name ?? "Default")")
+            print("🤖   Tools: \(tools.count)")
+            print("🤖   User query: \(text)")
+            print("🤖 ========================================")
             let response = try await ollamaService.chat(
                 messages: conversationHistory,
                 tools: tools.isEmpty ? nil : tools
@@ -600,25 +842,45 @@ class AIChatViewModel: ObservableObject {
             // Check if LLM wants to call tools
             if let toolCalls = response.tool_calls, !toolCalls.isEmpty {
                 print("✅ AIChatViewModel: LLM wants to call \(toolCalls.count) tools!")
+
                 // Execute MCP tools
+                print("🔧 Executing tool calls...")
                 let toolResults = try await executeToolCalls(toolCalls)
+                print("✅ Tool execution complete, got \(toolResults.count) results")
 
                 // Add tool results to conversation
                 conversationHistory.append(response)
 
-                // Add tool results as system message
-                for result in toolResults {
+                // Add tool results as tool messages
+                // IMPORTANT: Truncate very large tool results to prevent timeout
+                let maxToolResultLength = 5000  // Max characters per tool result
+                for (index, result) in toolResults.enumerated() {
+                    let truncatedResult: String
+                    if result.count > maxToolResultLength {
+                        truncatedResult = String(result.prefix(maxToolResultLength)) + "\n...[truncated, result was \(result.count) chars]"
+                        print("📝 Adding tool result \(index + 1): \(result.count) chars (truncated to \(maxToolResultLength))")
+                    } else {
+                        truncatedResult = result
+                        print("📝 Adding tool result \(index + 1): \(result.count) chars")
+                    }
+
                     conversationHistory.append(OllamaService.ChatMessage(
                         role: "tool",
-                        content: result
+                        content: truncatedResult
                     ))
                 }
 
                 // Get final response from LLM
+                print("🤖 Requesting final summary from LLM...")
+                print("🤖 Total conversation messages: \(conversationHistory.count)")
+                let totalChars = conversationHistory.reduce(0) { $0 + $1.content.count }
+                print("🤖 Total conversation size: \(totalChars) characters")
+
                 let finalResponse = try await ollamaService.chat(
                     messages: conversationHistory,
                     tools: nil
                 )
+                print("✅ Got final response: \(String(finalResponse.content.prefix(100)))...")
 
                 // Add assistant's final response
                 conversationHistory.append(finalResponse)
@@ -639,6 +901,8 @@ class AIChatViewModel: ObservableObject {
             }
 
         } catch {
+            print("❌ Error in sendMessage: \(error)")
+            print("❌ Error details: \(String(describing: error))")
             messages.append(AIChatMessage(
                 role: .system,
                 content: "Error: \(error.localizedDescription)",
@@ -651,12 +915,15 @@ class AIChatViewModel: ObservableObject {
     }
 
     private func getMCPTools() async throws -> [OllamaService.Tool] {
-        guard let mcpClient = mcpClient, mcpClient.isConnected else {
+        // Use selected MCP server's client if available, otherwise fall back to default
+        let clientToUse: MCPClientHTTP? = currentMCPClient ?? mcpClient
+
+        guard let client = clientToUse, client.isConnected else {
             return []
         }
 
         // Get tools from MCP server
-        let toolsList = try await mcpClient.listTools()
+        let toolsList = try await client.listTools()
 
         // Convert MCP tools to Ollama tool format
         return toolsList.tools.compactMap { tool in
@@ -679,7 +946,7 @@ class AIChatViewModel: ObservableObject {
             }
 
             // Enhance description with parameter examples for common tools
-            var enhancedDescription = tool.description ?? "MCP tool"
+            var enhancedDescription = tool.description
             if tool.name == "search_photos" {
                 enhancedDescription += ". Example: search_photos(query=\"beach\", n_results=10). IMPORTANT: Use 'query' not 'q'."
             }
@@ -698,7 +965,10 @@ class AIChatViewModel: ObservableObject {
     }
 
     private func executeToolCalls(_ toolCalls: [OllamaService.ChatMessage.ToolCall]) async throws -> [String] {
-        guard let mcpClient = mcpClient else {
+        // Use selected MCP server's client if available, otherwise fall back to default
+        let clientToUse: MCPClientHTTP? = currentMCPClient ?? mcpClient
+
+        guard let mcpClient = clientToUse else {
             throw AIChatError.mcpNotAvailable
         }
 

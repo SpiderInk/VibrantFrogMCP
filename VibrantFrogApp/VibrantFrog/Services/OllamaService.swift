@@ -13,14 +13,34 @@ import Foundation
 class OllamaService: ObservableObject {
     @Published var isAvailable: Bool = false
     @Published var availableModels: [OllamaModel] = []
-    @Published var selectedModel: String = "llama3.2:latest"
+    @Published var selectedModel: String = "llama3.2:latest" {
+        didSet {
+            print("⚡️ OllamaService.selectedModel CHANGED:")
+            print("⚡️   Old value: \(oldValue)")
+            print("⚡️   New value: \(selectedModel)")
+            print("⚡️   Stack trace:")
+            Thread.callStackSymbols.prefix(5).forEach { print("⚡️     \($0)") }
+        }
+    }
 
     // Models that support tool calling (function calling)
     // llama3.2 is generally better at actually calling tools vs mistral
     let toolSupportedModels = ["mistral", "llama3.1", "llama3.2", "qwen2.5", "mistral-nemo:latest"]
 
     private let baseURL = URL(string: "http://127.0.0.1:11434")!
-    private let session = URLSession.shared
+    private let session: URLSession
+
+    init() {
+        // Create custom URLSession with longer timeout for LLM responses
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 120  // 2 minutes for request
+        config.timeoutIntervalForResource = 300  // 5 minutes for full resource
+        self.session = URLSession(configuration: config)
+
+        Task {
+            await checkAvailability()
+        }
+    }
 
     struct OllamaModel: Codable, Identifiable {
         let name: String
@@ -39,12 +59,6 @@ class OllamaService: ObservableObject {
             let size: Int64
             let modified_at: String
             let digest: String
-        }
-    }
-
-    init() {
-        Task {
-            await checkAvailability()
         }
     }
 
@@ -120,7 +134,7 @@ class OllamaService: ObservableObject {
     }
 
     struct Tool: Codable {
-        let type: String = "function"
+        var type: String = "function"
         let function: ToolFunction
 
         struct ToolFunction: Codable {
@@ -130,7 +144,7 @@ class OllamaService: ObservableObject {
         }
 
         struct ToolParameters: Codable {
-            let type: String = "object"
+            var type: String = "object"
             let properties: [String: PropertySchema]
             let required: [String]
         }
@@ -145,8 +159,8 @@ class OllamaService: ObservableObject {
         let model: String
         let messages: [ChatMessage]
         let tools: [Tool]?
-        let stream: Bool = false
-        let temperature: Double = 0.3  // Moderate temperature for better tool calling
+        var stream: Bool = false
+        var temperature: Double = 0.3  // Moderate temperature for better tool calling
     }
 
     struct ChatResponse: Codable {
@@ -171,7 +185,24 @@ class OllamaService: ObservableObject {
             tools: tools
         )
 
+        // CRITICAL LOGGING: Show exactly what model is being sent to Ollama
+        print("🚀 ============================================")
+        print("🚀 OllamaService.chat() - ACTUAL REQUEST:")
+        print("🚀   Model being sent to Ollama: \(chatRequest.model)")
+        print("🚀   selectedModel property value: \(selectedModel)")
+        print("🚀   Tools count: \(tools?.count ?? 0)")
+        print("🚀   Messages count: \(messages.count)")
+        print("🚀 ============================================")
+
         request.httpBody = try JSONEncoder().encode(chatRequest)
+
+        // Also log the raw JSON being sent
+        if let jsonData = request.httpBody,
+           let jsonString = String(data: jsonData, encoding: .utf8) {
+            print("🚀 Raw JSON request to Ollama:")
+            print(jsonString)
+            print("🚀 ============================================")
+        }
 
         let (data, response) = try await session.data(for: request)
 

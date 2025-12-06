@@ -1,93 +1,86 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-pip-wheel-metadata/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
-
-# Virtual environments
-venv/
-env/
-ENV/
-env.bak/
-venv.bak/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
+# macOS / Xcode
 .DS_Store
+.AppleDouble
+.LSOverride
+._*
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+xcuserdata/
+DerivedData/
+*.moved-aside
+*.pbxuser
+!default.pbxuser
+*.mode1v3
+!default.mode1v3
+*.mode2v3
+!default.mode2v3
+*.perspectivev3
+!default.perspectivev3
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+Thumbs.db
 
-# ChromaDB Database & Cache
-# DO NOT commit the photo index database or cache!
-indexed_photos.json
-photo_index/
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# CocoaPods
+Pods/
+Podfile.lock
+
+# Carthage
+Carthage/Build/
+Carthage/Checkouts/
 
 # Temporary files
 *.tmp
 *.temp
 temp/
 tmp/
+*~
 
 # Logs
 *.log
 logs/
+
+# Python (for MCP servers)
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints
+
+# ChromaDB / Vector Database
+indexed_photos.json
+photo_index/
+chroma_db/
+embeddings/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
 
 # Environment variables
 .env
 .env.local
 .env.*.local
 
-# Test files
-.pytest_cache/
-.coverage
-htmlcov/
-.tox/
-.hypothesis/
+# Build artifacts
+build/
+dist/
 
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# macOS
-.DS_Store
-.AppleDouble
-.LSOverride
-._*
-
-# Thumbnails
-Thumbs.db
-
-# Personal notes (if you add any)
-notes.txt
-TODO.txt
-scratch/
-
-# Temporary/planning documents (not needed in repo)
-VIBRANTFROG_APP_SPEC*.md
-FACE_RECOGNITION_*.md
-
-# Face recognition experimental scripts (if not ready)
-# Uncomment these if you're not actively working on face recognition:
-# browse_faces_web.py
-# cluster_faces.py
-# index_faces.py
+# User data (uncomment if you don't want to commit user settings)
+# UserData/
+# conversations.json
+# settings.json

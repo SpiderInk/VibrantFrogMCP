@@ -137,7 +137,7 @@ class MCPServerRegistry: ObservableObject {
                         serverID: server.id,
                         serverName: server.name,
                         name: tool.name,
-                        description: tool.description ?? "",
+                        description: tool.description,
                         inputSchema: tool.inputSchema,
                         isEnabled: !server.disabledTools.contains(tool.name)
                     )
@@ -169,7 +169,7 @@ class MCPServerRegistry: ObservableObject {
                     serverID: server.id,
                     serverName: server.name,
                     name: tool.name,
-                    description: tool.description ?? "",
+                    description: tool.description,
                     inputSchema: tool.inputSchema,
                     isEnabled: !server.disabledTools.contains(tool.name)
                 )

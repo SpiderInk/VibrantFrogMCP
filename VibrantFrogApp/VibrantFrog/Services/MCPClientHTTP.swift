@@ -262,21 +262,39 @@ class MCPClientHTTP: ObservableObject {
                 )
             }
 
-            // Parse JSON response
-            let mcpResponse = try JSONDecoder().decode(MCPResponse<R>.self, from: responseData)
+            // Try to parse as MCP JSON-RPC response
+            do {
+                let mcpResponse = try JSONDecoder().decode(MCPResponse<R>.self, from: responseData)
 
-            if let error = mcpResponse.error {
-                print("❌ MCPClientHTTP: MCP error \(error.code): \(error.message)")
-                throw MCPClientError.serverError(code: error.code, message: error.message)
-            }
+                if let error = mcpResponse.error {
+                    print("❌ MCPClientHTTP: MCP error \(error.code): \(error.message)")
+                    throw MCPClientError.serverError(code: error.code, message: error.message)
+                }
 
-            guard let result = mcpResponse.result else {
-                print("❌ MCPClientHTTP: No result in response")
+                guard let result = mcpResponse.result else {
+                    print("❌ MCPClientHTTP: No result in response")
+                    throw MCPClientError.invalidResponse
+                }
+
+                print("✅ MCPClientHTTP: Successfully parsed response for \(method)")
+                return result
+            } catch {
+                // If JSON-RPC parsing fails, check if this is an AWS API Gateway error or other non-MCP response
+                if let jsonObject = try? JSONSerialization.jsonObject(with: responseData) as? [String: Any] {
+                    if let output = jsonObject["Output"] as? [String: Any],
+                       let errorType = output["__type"] as? String {
+                        print("❌ MCPClientHTTP: AWS API Gateway error: \(errorType)")
+                        throw MCPClientError.serverError(
+                            code: httpResponse.statusCode,
+                            message: "This endpoint returned an AWS API Gateway error (\(errorType)). It does not appear to be a valid MCP server. Please verify the URL is correct and points to an MCP-compatible endpoint."
+                        )
+                    }
+                }
+
+                print("❌ MCPClientHTTP: Failed to parse MCP JSON-RPC response: \(error.localizedDescription)")
+                print("📄 Response was: \(String(data: responseData, encoding: .utf8) ?? "unable to decode")")
                 throw MCPClientError.invalidResponse
             }
-
-            print("✅ MCPClientHTTP: Successfully parsed response for \(method)")
-            return result
 
         } catch let error as MCPClientError {
             throw error
