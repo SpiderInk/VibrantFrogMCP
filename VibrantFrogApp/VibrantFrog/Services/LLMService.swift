@@ -126,7 +126,7 @@ class LLMService: ObservableObject {
         // Create directory if needed
         try FileManager.default.createDirectory(at: modelDir, withIntermediateDirectories: true)
 
-        let destinationURL = modelDir.appendingPathComponent(url.lastPathComponent)
+        _ = modelDir.appendingPathComponent(url.lastPathComponent)
 
         // TODO: Implement actual download with progress
         // Using URLSession with delegate for progress tracking

@@ -161,7 +161,7 @@ struct AIChatView: View {
                     .id(viewModel.thumbnailsVersion)  // Force entire stack to rebuild when thumbnails change
                     .padding()
                 }
-                .onChange(of: viewModel.messages.count) { _ in
+                .onChange(of: viewModel.messages.count) {
                     if let lastMessage = viewModel.messages.last {
                         withAnimation {
                             proxy.scrollTo(lastMessage.id, anchor: .bottom)
@@ -239,12 +239,12 @@ struct AIChatView: View {
                 }
             }
         }
-        .onChange(of: viewModel.ollamaService.selectedModel) { newModel in
-            print("🔄 Model changed to: \(newModel), setup complete: \(viewModel.isSetupComplete)")
+        .onChange(of: viewModel.ollamaService.selectedModel) { oldValue, newValue in
+            print("🔄 Model changed to: \(newValue), setup complete: \(viewModel.isSetupComplete)")
             // Save model selection when it changes (only if setup is complete)
             if viewModel.isSetupComplete {
-                UserDefaults.standard.set(newModel, forKey: "selectedOllamaModel")
-                print("💾 Saved model selection: \(newModel)")
+                UserDefaults.standard.set(newValue, forKey: "selectedOllamaModel")
+                print("💾 Saved model selection: \(newValue)")
             } else {
                 print("⏳ Not saving yet - setup not complete")
             }
@@ -1055,7 +1055,8 @@ class AIChatViewModel: ObservableObject {
         var thumbnails: [String: NSImage] = [:]
 
         // Load thumbnails in parallel for better performance
-        await withTaskGroup(of: (String, NSImage?).self) { group in
+        // Use Data instead of NSImage to satisfy Sendable requirements
+        await withTaskGroup(of: (String, Data?).self) { group in
             for uuid in uuids {
                 group.addTask {
                     do {
@@ -1071,18 +1072,17 @@ class AIChatViewModel: ObservableObject {
                             if content.type == "image" {
                                 // Handle base64 image data
                                 if let imageData = content.data,
-                                   let data = Data(base64Encoded: imageData),
-                                   let image = NSImage(data: data) {
-                                    print("✅ Loaded thumbnail via MCP for \(uuid)")
-                                    return (uuid, image)
+                                   let data = Data(base64Encoded: imageData) {
+                                    print("✅ Loaded thumbnail data via MCP for \(uuid)")
+                                    return (uuid, data)
                                 }
                             } else if content.type == "text", let text = content.text {
                                 // Handle file path response
                                 if text.hasPrefix("/") || text.hasPrefix("file://") {
                                     let filePath = text.replacingOccurrences(of: "file://", with: "")
-                                    if let image = NSImage(contentsOfFile: filePath) {
-                                        print("✅ Loaded thumbnail from path via MCP for \(uuid)")
-                                        return (uuid, image)
+                                    if let data = try? Data(contentsOf: URL(fileURLWithPath: filePath)) {
+                                        print("✅ Loaded thumbnail data from path via MCP for \(uuid)")
+                                        return (uuid, data)
                                     }
                                 }
                             }
@@ -1097,8 +1097,9 @@ class AIChatViewModel: ObservableObject {
                 }
             }
 
-            for await (uuid, image) in group {
-                if let image = image {
+            for await (uuid, imageData) in group {
+                if let imageData = imageData,
+                   let image = NSImage(data: imageData) {
                     thumbnails[uuid] = image
                 }
             }

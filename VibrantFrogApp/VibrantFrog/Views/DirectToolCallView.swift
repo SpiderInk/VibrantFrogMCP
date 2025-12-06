@@ -241,7 +241,7 @@ struct DirectToolCallView: View {
                 photoService.requestAuthorization()
             }
         }
-        .onChange(of: selectedTool) { _ in
+        .onChange(of: selectedTool) {
             // Clear parameters when tool selection changes
             parameters = [:]
         }

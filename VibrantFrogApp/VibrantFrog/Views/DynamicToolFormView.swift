@@ -58,9 +58,9 @@ struct DynamicToolFormView: View {
                 }
             }
         }
-        .onChange(of: stringValues) { _ in updateParameters() }
-        .onChange(of: numberValues) { _ in updateParameters() }
-        .onChange(of: boolValues) { _ in updateParameters() }
+        .onChange(of: stringValues) { updateParameters() }
+        .onChange(of: numberValues) { updateParameters() }
+        .onChange(of: boolValues) { updateParameters() }
         .onAppear {
             print("📋 DynamicToolFormView: onAppear called")
             print("📋 InputSchema: \(String(describing: inputSchema))")

@@ -229,7 +229,7 @@ struct IndexingView: View {
         Task {
             do {
                 let store = try EmbeddingStore()
-                let alreadyIndexed = store.getIndexedCount()
+                _ = store.getIndexedCount()
 
                 // Get all photos
                 let photos = photoLibraryService.fetchAllPhotos()

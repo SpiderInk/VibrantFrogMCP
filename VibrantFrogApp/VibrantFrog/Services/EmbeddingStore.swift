@@ -87,7 +87,7 @@ class EmbeddingStore {
 
         // Convert embedding to blob
         let embeddingData = embedding.withUnsafeBufferPointer { Data(buffer: $0) }
-        embeddingData.withUnsafeBytes { ptr in
+        _ = embeddingData.withUnsafeBytes { ptr in
             sqlite3_bind_blob(stmt, 3, ptr.baseAddress, Int32(embeddingData.count), unsafeBitCast(-1, to: sqlite3_destructor_type.self))
         }
 

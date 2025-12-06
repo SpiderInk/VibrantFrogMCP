@@ -86,7 +86,7 @@ struct ChatView: View {
                     }
                     .padding()
                 }
-                .onChange(of: messages.count) { _ in
+                .onChange(of: messages.count) {
                     if let lastMessage = messages.last {
                         withAnimation {
                             proxy.scrollTo(lastMessage.id, anchor: .bottom)
@@ -379,7 +379,7 @@ struct ChatView: View {
         let lower = query.lowercased()
 
         // Remove common prefixes
-        var terms = lower
+        let terms = lower
             .replacingOccurrences(of: "show me ", with: "")
             .replacingOccurrences(of: "find ", with: "")
             .replacingOccurrences(of: "search for ", with: "")
