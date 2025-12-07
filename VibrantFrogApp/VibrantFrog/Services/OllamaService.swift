@@ -121,6 +121,7 @@ class OllamaService: ObservableObject {
     struct ChatMessage: Codable {
         let role: String
         let content: String
+        var images: [String]?  // Base64-encoded images for vision models
         var tool_calls: [ToolCall]?
 
         struct ToolCall: Codable {
@@ -130,6 +131,22 @@ class OllamaService: ObservableObject {
                 let name: String
                 let arguments: [String: AnyCodable]
             }
+        }
+
+        // Initializer for text-only messages (backward compatible)
+        init(role: String, content: String, tool_calls: [ToolCall]? = nil) {
+            self.role = role
+            self.content = content
+            self.images = nil
+            self.tool_calls = tool_calls
+        }
+
+        // Initializer for messages with images
+        init(role: String, content: String, images: [String]?, tool_calls: [ToolCall]? = nil) {
+            self.role = role
+            self.content = content
+            self.images = images
+            self.tool_calls = tool_calls
         }
     }
 

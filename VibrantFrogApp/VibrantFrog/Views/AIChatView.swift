@@ -20,6 +20,7 @@ struct AIChatView: View {
     @State private var isProcessing: Bool = false
     @State private var selectedPromptTemplate: PromptTemplate?
     @State private var selectedMCPServer: MCPServer?
+    @State private var attachedImages: [AttachedImage] = []
 
     // Observe ollamaService directly to get UI updates
     private var ollamaService: OllamaService {
@@ -88,21 +89,43 @@ struct AIChatView: View {
 
                     // MCP Server selector
                     Menu {
+                        // None option to disable tools
+                        Button(action: {
+                            selectedMCPServer = nil
+                            viewModel.setMCPServer(nil)
+                        }) {
+                            HStack {
+                                Text("None (No Tools)")
+                                if selectedMCPServer == nil {
+                                    Spacer()
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+
+                        Divider()
+
                         ForEach(mcpRegistry.servers.filter { $0.isEnabled }) { server in
                             Button(action: {
                                 selectedMCPServer = server
                                 viewModel.setMCPServer(server)
                             }) {
-                                Text(server.name)
+                                HStack {
+                                    Text(server.name)
+                                    if selectedMCPServer?.id == server.id {
+                                        Spacer()
+                                        Image(systemName: "checkmark")
+                                    }
+                                }
                             }
                         }
                     } label: {
                         HStack {
-                            Image(systemName: "network")
+                            Image(systemName: selectedMCPServer == nil ? "xmark.circle" : "network")
                             if let server = selectedMCPServer {
                                 Text(server.name)
                             } else {
-                                Text("Select MCP Server")
+                                Text("None (No Tools)")
                             }
                             Image(systemName: "chevron.down")
                                 .font(.caption)
@@ -172,24 +195,69 @@ struct AIChatView: View {
 
             Divider()
 
-            // Input
-            HStack(spacing: 12) {
-                TextField("Ask about your photos...", text: $inputText)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit {
-                        sendMessage()
-                    }
-                    .disabled(isProcessing || !viewModel.ollamaService.isAvailable)
+            // Input area with image attachments
+            VStack(spacing: 0) {
+                // Show attached images
+                if !attachedImages.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(attachedImages) { attached in
+                                ZStack(alignment: .topTrailing) {
+                                    Image(nsImage: attached.image)
+                                        .resizable()
+                                        .aspectRatio(contentMode: .fill)
+                                        .frame(width: 60, height: 60)
+                                        .clipShape(RoundedRectangle(cornerRadius: 8))
 
-                Button(action: sendMessage) {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.title2)
-                        .foregroundStyle(inputText.isEmpty || isProcessing ? .secondary : Color.blue)
+                                    // Remove button
+                                    Button(action: {
+                                        attachedImages.removeAll { $0.id == attached.id }
+                                    }) {
+                                        Image(systemName: "xmark.circle.fill")
+                                            .foregroundStyle(.white, .gray)
+                                            .font(.system(size: 20))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .offset(x: 5, y: -5)
+                                }
+                            }
+                        }
+                        .padding(.horizontal)
+                        .padding(.vertical, 8)
+                    }
+                    .background(Color(nsColor: .controlBackgroundColor))
+
+                    Divider()
                 }
-                .disabled(inputText.isEmpty || isProcessing || !viewModel.ollamaService.isAvailable)
-                .buttonStyle(.plain)
+
+                // Text input with buttons
+                HStack(spacing: 12) {
+                    // Image attachment button
+                    Button(action: selectImages) {
+                        Image(systemName: "photo.on.rectangle")
+                            .font(.title3)
+                            .foregroundStyle(.blue)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Attach images (for vision models like llava)")
+
+                    TextField("Ask about your photos...", text: $inputText)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit {
+                            sendMessage()
+                        }
+                        .disabled(isProcessing || !viewModel.ollamaService.isAvailable)
+
+                    Button(action: sendMessage) {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.title2)
+                            .foregroundStyle(inputText.isEmpty || isProcessing ? .secondary : Color.blue)
+                    }
+                    .disabled(inputText.isEmpty || isProcessing || !viewModel.ollamaService.isAvailable)
+                    .buttonStyle(.plain)
+                }
+                .padding()
             }
-            .padding()
         }
         .frame(minWidth: 600, minHeight: 400)
         .onAppear {
@@ -255,12 +323,40 @@ struct AIChatView: View {
         guard !inputText.isEmpty else { return }
 
         let userMessage = inputText
+        let images = attachedImages  // Capture attached images
         inputText = ""
+        attachedImages = []  // Clear attachments
         isProcessing = true
 
         Task {
-            await viewModel.sendMessage(userMessage)
+            await viewModel.sendMessage(userMessage, images: images.isEmpty ? nil : images)
             isProcessing = false
+        }
+    }
+
+    private func selectImages() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowedContentTypes = [.jpeg, .png, .heic, .tiff]
+
+        panel.begin { response in
+            guard response == .OK else { return }
+
+            for url in panel.urls {
+                if let image = NSImage(contentsOf: url),
+                   let tiffData = image.tiffRepresentation,
+                   let bitmap = NSBitmapImageRep(data: tiffData),
+                   let jpegData = bitmap.representation(using: .jpeg, properties: [:]) {
+                    let base64String = jpegData.base64EncodedString()
+
+                    self.attachedImages.append(AttachedImage(
+                        image: image,
+                        base64String: base64String
+                    ))
+                }
+            }
         }
     }
 }
@@ -574,23 +670,34 @@ class AIChatViewModel: ObservableObject {
         regenerateSystemMessage()
     }
 
-    func setMCPServer(_ server: MCPServer) {
+    func setMCPServer(_ server: MCPServer?) {
         currentMCPServer = server
-        // Save selection to UserDefaults
-        UserDefaults.standard.set(server.id.uuidString, forKey: selectedMCPServerKey)
+
+        // Save selection to UserDefaults (or clear if nil)
+        guard let selectedServer = server else {
+            UserDefaults.standard.removeObject(forKey: selectedMCPServerKey)
+            // Clear client and tools for "None" selection
+            currentMCPClient = nil
+            availableTools = []
+            print("🔌 MCP Server set to None - tools disabled")
+            regenerateSystemMessage()
+            return
+        }
+
+        UserDefaults.standard.set(selectedServer.id.uuidString, forKey: selectedMCPServerKey)
 
         // Create MCP client for this server
         Task {
             do {
-                print("🔌 Connecting to MCP server: \(server.name) at \(server.url)")
-                print("🔌 MCP endpoint path: \(server.mcpEndpointPath ?? "default(/mcp)")")
+                print("🔌 Connecting to MCP server: \(selectedServer.name) at \(selectedServer.url)")
+                print("🔌 MCP endpoint path: \(selectedServer.mcpEndpointPath ?? "default(/mcp)")")
 
                 // Construct full URL with endpoint path
-                var fullURL = server.url
-                if let endpointPath = server.mcpEndpointPath, !endpointPath.isEmpty && endpointPath != "default" {
-                    fullURL = server.url.hasSuffix("/") ? server.url + endpointPath : server.url + "/" + endpointPath
+                var fullURL = selectedServer.url
+                if let endpointPath = selectedServer.mcpEndpointPath, !endpointPath.isEmpty && endpointPath != "default" {
+                    fullURL = selectedServer.url.hasSuffix("/") ? selectedServer.url + endpointPath : selectedServer.url + "/" + endpointPath
                 } else {
-                    fullURL = server.url.hasSuffix("/mcp") ? server.url : server.url + "/mcp"
+                    fullURL = selectedServer.url.hasSuffix("/mcp") ? selectedServer.url : selectedServer.url + "/mcp"
                 }
 
                 let client = MCPClientHTTP(
@@ -604,12 +711,12 @@ class AIChatViewModel: ObservableObject {
                         let params = tool.inputSchema.properties?.keys.joined(separator: ", ") ?? ""
                         return "- \(tool.name)(\(params))"
                     }
-                    print("✅ Successfully connected to \(server.name) with \(tools.count) tools")
+                    print("✅ Successfully connected to \(selectedServer.name) with \(tools.count) tools")
                     // Regenerate system message with new tools
                     regenerateSystemMessage()
                 }
             } catch {
-                print("❌ Failed to connect to \(server.name): \(error)")
+                print("❌ Failed to connect to \(selectedServer.name): \(error)")
                 await MainActor.run {
                     // Clear the selected server's client on failure
                     self.currentMCPClient = nil
@@ -618,7 +725,7 @@ class AIChatViewModel: ObservableObject {
                     // Add error message to chat
                     self.messages.append(AIChatMessage(
                         role: .system,
-                        content: "⚠️ Failed to connect to MCP server '\(server.name)': \(error.localizedDescription)",
+                        content: "⚠️ Failed to connect to MCP server '\(selectedServer.name)': \(error.localizedDescription)",
                         timestamp: Date()
                     ))
                 }
@@ -809,15 +916,18 @@ class AIChatViewModel: ObservableObject {
         store.updateCurrentConversation(current)
     }
 
-    func sendMessage(_ text: String) async {
-        // Add user message
-        let userMsg = AIChatMessage(role: .user, content: text, timestamp: Date())
+    func sendMessage(_ text: String, images: [AttachedImage]? = nil) async {
+        // Add user message with images
+        var userMsg = AIChatMessage(role: .user, content: text, timestamp: Date())
+        userMsg.attachedImages = images
         messages.append(userMsg)
 
-        // Add to conversation history
+        // Add to conversation history with base64 images
+        let imageBase64Strings = images?.map { $0.base64String }
         conversationHistory.append(OllamaService.ChatMessage(
             role: "user",
-            content: text
+            content: text,
+            images: imageBase64Strings
         ))
 
         do {
@@ -923,6 +1033,11 @@ class AIChatViewModel: ObservableObject {
     }
 
     private func getMCPTools() async throws -> [OllamaService.Tool] {
+        // If no MCP server selected (None), return empty tools
+        guard currentMCPServer != nil else {
+            return []
+        }
+
         // Use selected MCP server's client if available, otherwise fall back to default
         let clientToUse: MCPClientHTTP? = currentMCPClient ?? mcpClient
 
@@ -1188,6 +1303,7 @@ struct AIChatMessage: Identifiable, Equatable {
     let timestamp: Date
     var toolName: String?
     var photoThumbnails: [PhotoThumbnail]?
+    var attachedImages: [AttachedImage]?  // Images attached to user messages
 
     enum MessageRole {
         case user
@@ -1227,6 +1343,16 @@ struct PhotoThumbnail: Identifiable {
     let description: String?
 }
 
+struct AttachedImage: Identifiable, Equatable {
+    let id = UUID()
+    let image: NSImage
+    let base64String: String
+
+    static func == (lhs: AttachedImage, rhs: AttachedImage) -> Bool {
+        lhs.id == rhs.id
+    }
+}
+
 // MARK: - Message View
 
 struct MessageView: View {
@@ -1251,11 +1377,27 @@ struct MessageView: View {
                     .fontWeight(.semibold)
                     .foregroundStyle(.secondary)
 
+                // Attached images (for user messages with vision)
+                if let attachedImages = message.attachedImages, !attachedImages.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(attachedImages) { attached in
+                                Image(nsImage: attached.image)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fill)
+                                    .frame(width: 100, height: 100)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                            }
+                        }
+                    }
+                    .padding(.bottom, 4)
+                }
+
                 // Content
                 Text(message.content)
                     .textSelection(.enabled)
 
-                // Photo thumbnails grid
+                // Photo thumbnails grid (from search results)
                 if let thumbnails = message.photoThumbnails, !thumbnails.isEmpty {
                     let _ = print("🎨 MessageView: Rendering \(thumbnails.count) thumbnails for message")
                     LazyVGrid(columns: [
