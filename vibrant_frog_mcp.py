@@ -14,11 +14,20 @@ import sys
 import time
 import logging
 import base64
+import uuid
+from datetime import datetime
 from photo_retrieval import get_photo_by_uuid, get_photo_path_for_display, cleanup_temp_photo
 from album_manager import (
     create_album, delete_album, list_albums, get_album_photo_count,
     add_photos_to_album, remove_photos_from_album, create_album_from_search
 )
+from index_photos import (
+    index_photo_with_metadata,
+    load_indexed_cache,
+    save_indexed_cache,
+    describe_image as index_photos_describe_image
+)
+import osxphotos
 
 # Configure logging
 logging.basicConfig(
@@ -36,6 +45,46 @@ os.makedirs(DB_PATH, exist_ok=True)
 # Global variables for lazy initialization
 chroma_client = None
 collection = None
+
+# Job Management State
+indexing_jobs = {}
+job_cancel_flags = {}
+
+class IndexingJob:
+    """Represents an indexing job with progress tracking for Apple Photos Library"""
+    def __init__(self, job_id: str, batch_size: Optional[int] = None, reverse_chronological: bool = True, include_cloud: bool = True):
+        self.job_id = job_id
+        self.batch_size = batch_size
+        self.reverse_chronological = reverse_chronological
+        self.include_cloud = include_cloud
+        self.status = "pending"  # pending, running, completed, failed, cancelled
+        self.total_photos = 0
+        self.processed_photos = 0
+        self.current_photo = None
+        self.started_at = None
+        self.completed_at = None
+        self.error = None
+        self.indexed_uuids = []
+
+    def to_dict(self):
+        """Convert job to dictionary for JSON serialization"""
+        return {
+            "job_id": self.job_id,
+            "batch_size": self.batch_size,
+            "reverse_chronological": self.reverse_chronological,
+            "include_cloud": self.include_cloud,
+            "status": self.status,
+            "total_photos": self.total_photos,
+            "processed_photos": self.processed_photos,
+            "current_photo": self.current_photo,
+            "progress_percent": (
+                round((self.processed_photos / self.total_photos * 100), 2)
+                if self.total_photos > 0 else 0
+            ),
+            "started_at": self.started_at.isoformat() if self.started_at else None,
+            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+            "error": self.error
+        }
 
 def get_collection():
     """Lazy-load ChromaDB collection to avoid startup timeout"""
@@ -64,75 +113,9 @@ def get_collection():
 
     return collection
 
-async def describe_image(image_path: str) -> str:
-    """Use LLaVA to generate rich description of image"""
-    start_time = time.time()
-    logger.info(f"Generating description for {os.path.basename(image_path)}")
-
-    prompt = """Describe this image in comprehensive detail, including:
-- Main subjects and objects present
-- Colors and lighting (bright, dim, warm tones, cool tones, etc.)
-- Composition and framing (close-up, wide shot, rule of thirds, etc.)
-- Image orientation (landscape, portrait, square)
-- Image quality (sharp, blurry, well-exposed, underexposed, etc.)
-- Mood and atmosphere (cheerful, somber, energetic, calm, etc.)
-- Setting and background elements
-- Any notable features, patterns, or textures
-- Activities or actions taking place
-Be specific and detailed to enable accurate searching."""
-
-    response = ollama.chat(
-        model='llava:7b',  # Using 7b for better performance (2-3x faster than 13b)
-        messages=[{
-            'role': 'user',
-            'content': prompt,
-            'images': [image_path]
-        }]
-    )
-
-    elapsed = time.time() - start_time
-    logger.info(f"Description generated in {elapsed:.2f}s")
-
-    return response['message']['content']
-
-async def index_photo(image_path: str) -> dict:
-    """Index a single photo"""
-    overall_start = time.time()
-    path = Path(image_path)
-
-    if not path.exists():
-        raise FileNotFoundError(f"Image not found: {image_path}")
-
-    logger.info(f"Indexing photo: {path.name}")
-
-    # Generate description
-    description_start = time.time()
-    description = await describe_image(image_path)
-    logger.info(f"Description step: {time.time()-description_start:.2f}s")
-
-    # Get collection (lazy init)
-    collection_start = time.time()
-    coll = get_collection()
-    logger.info(f"Collection retrieval: {time.time()-collection_start:.2f}s")
-
-    # Store in vector DB (upsert = update if exists, add if new)
-    db_start = time.time()
-    coll.upsert(
-        documents=[description],
-        ids=[str(path.absolute())],
-        metadatas=[{
-            'path': str(path.absolute()),
-            'filename': path.name,
-            'description': description
-        }]
-    )
-    logger.info(f"Database upsert: {time.time()-db_start:.2f}s")
-    logger.info(f"Total indexing time: {time.time()-overall_start:.2f}s")
-
-    return {
-        'path': image_path,
-        'description': description
-    }
+# Use the comprehensive describe_image and index_photo_with_metadata from index_photos.py
+# These functions handle Apple Photos Library integration, HEIC conversion,
+# rich metadata, caching, etc.
 
 async def search_photos(query: str, n_results: int = 5) -> list:
     """Search photos by natural language query"""
@@ -227,33 +210,110 @@ async def get_photo(uuid: str) -> dict:
             logger.info(f"Temp export cleaned up in {time.time()-cleanup_start:.2f}s")
 
 
-async def index_directory(directory_path: str) -> list:
-    """Recursively index all photos in a directory"""
-    start_time = time.time()
-    directory = Path(directory_path)
-    image_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic'}
+async def run_indexing_job_background(job_id: str):
+    """
+    Background task to run Apple Photos Library indexing with progress tracking.
+    This allows the MCP tool to return immediately while indexing continues.
+    """
+    job = indexing_jobs[job_id]
+    job.status = "running"
+    job.started_at = datetime.now()
 
-    logger.info(f"Indexing directory: {directory_path}")
+    logger.info(f"🚀 Starting background Apple Photos indexing job {job_id}")
 
-    # Count total images first
-    image_files = [img for img in directory.rglob('*') if img.suffix.lower() in image_extensions]
-    logger.info(f"Found {len(image_files)} images to index")
+    try:
+        # Ensure ChromaDB collection is initialized
+        # This triggers lazy loading if not already done
+        get_collection()
 
-    indexed = []
-    for i, img_path in enumerate(image_files, 1):
-        try:
-            logger.info(f"[{i}/{len(image_files)}] Processing {img_path.name}")
-            result = await index_photo(str(img_path))
-            indexed.append(result)
-        except Exception as e:
-            logger.error(f"Error indexing {img_path}: {e}")
+        # Open Apple Photos Library
+        logger.info("📷 Opening Apple Photos Library...")
+        photosdb = osxphotos.PhotosDB()
 
-    elapsed = time.time() - start_time
-    logger.info(f"Directory indexing complete: {len(indexed)} photos in {elapsed:.1f}s")
-    if indexed:
-        logger.info(f"Average: {elapsed/len(indexed):.2f}s per photo")
+        # Load cache of already-indexed photos
+        indexed_uuids = load_indexed_cache()
+        logger.info(f"📊 Found {len(indexed_uuids)} already indexed photos")
 
-    return indexed
+        # Get all photos (images only, not videos)
+        photos = photosdb.photos(images=True, movies=False)
+        logger.info(f"📊 Total photos in library: {len(photos)}")
+
+        # Sort by date (newest first if reverse_chronological)
+        if job.reverse_chronological:
+            photos = sorted(photos, key=lambda p: p.date if p.date else datetime.min, reverse=True)
+            logger.info(f"📊 Sorted by date (newest first)")
+        else:
+            photos = sorted(photos, key=lambda p: p.date if p.date else datetime.max)
+            logger.info(f"📊 Sorted by date (oldest first)")
+
+        # Filter cloud assets if requested
+        if not job.include_cloud:
+            photos = [p for p in photos if not p.iscloudasset]
+            logger.info(f"📊 Local photos only: {len(photos)}")
+
+        # Filter out already indexed
+        photos = [p for p in photos if p.uuid not in indexed_uuids]
+        logger.info(f"📊 New photos to index: {len(photos)}")
+
+        # Apply batch limit if specified
+        if job.batch_size:
+            photos = photos[:job.batch_size]
+            logger.info(f"📊 Processing batch of {job.batch_size} photos")
+
+        job.total_photos = len(photos)
+
+        # Index each photo
+        for i, photo in enumerate(photos):
+            # Check for cancellation
+            if job_cancel_flags.get(job_id, False):
+                logger.info(f"Job {job_id} cancelled by user")
+                job.status = "cancelled"
+                job.completed_at = datetime.now()
+                # Save cache before exiting
+                save_indexed_cache(indexed_uuids)
+                return
+
+            try:
+                job.current_photo = photo.original_filename
+                job.processed_photos = i
+
+                logger.info(f"[{i+1}/{job.total_photos}] Processing {photo.original_filename}")
+
+                # Index the photo using comprehensive Apple Photos indexing
+                uuid_result = await index_photo_with_metadata(photo)
+
+                if uuid_result:
+                    job.indexed_uuids.append(uuid_result)
+                    indexed_uuids.add(uuid_result)
+                    # Save cache immediately after each successful index
+                    save_indexed_cache(indexed_uuids)
+                    logger.info(f"💾 Cache saved - {len(indexed_uuids)} total indexed")
+
+                # Update progress
+                job.processed_photos = i + 1
+
+            except Exception as e:
+                logger.error(f"Error indexing {photo.original_filename}: {e}")
+                # Continue with next photo even if one fails
+
+        # Job completed successfully
+        job.status = "completed"
+        job.completed_at = datetime.now()
+
+        # Final cache save
+        save_indexed_cache(indexed_uuids)
+
+        elapsed = (job.completed_at - job.started_at).total_seconds()
+        logger.info(f"✅ Job {job_id} completed: {job.processed_photos}/{job.total_photos} photos in {elapsed:.1f}s")
+        logger.info(f"📊 Total indexed: {len(indexed_uuids)}")
+
+    except Exception as e:
+        logger.error(f"❌ Job {job_id} failed: {e}")
+        import traceback
+        traceback.print_exc()
+        job.status = "failed"
+        job.error = str(e)
+        job.completed_at = datetime.now()
 
 # Create MCP server
 app = Server("vibrant-frog-mcp", "Vibrant Frog MCP for Apple Photo Library Indexing and Search")
@@ -261,20 +321,6 @@ app = Server("vibrant-frog-mcp", "Vibrant Frog MCP for Apple Photo Library Index
 @app.list_tools()
 async def list_tools() -> list[Tool]:
     return [
-        Tool(
-            name="index_photo",
-            description="Index a photo by generating a rich description and storing it in the vector database",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "image_path": {
-                        "type": "string",
-                        "description": "Absolute path to the image file"
-                    }
-                },
-                "required": ["image_path"]
-            }
-        ),
         Tool(
             name="search_photos",
             description="Search indexed photos using natural language queries",
@@ -292,20 +338,6 @@ async def list_tools() -> list[Tool]:
                     }
                 },
                 "required": ["query"]
-            }
-        ),
-        Tool(
-            name="index_directory",
-            description="Recursively index all photos in a directory",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "directory_path": {
-                        "type": "string",
-                        "description": "Path to directory containing photos"
-                    }
-                },
-                "required": ["directory_path"]
             }
         ),
         Tool(
@@ -419,20 +451,74 @@ async def list_tools() -> list[Tool]:
                 },
                 "required": ["album_name", "photo_uuids"]
             }
+        ),
+        Tool(
+            name="start_indexing_job",
+            description="Start a background Apple Photos Library indexing job. Returns immediately with a job_id that can be used to poll for progress. This is the recommended way to index your photo library. By default, indexes newest photos first and skips already-indexed photos.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "batch_size": {
+                        "type": "integer",
+                        "description": "Optional: Limit number of photos to index. If not specified, indexes all unindexed photos. Recommended: 100-500 for manageable sessions."
+                    },
+                    "reverse_chronological": {
+                        "type": "boolean",
+                        "description": "Optional: Start with newest photos first (default: true). Set to false to index oldest photos first.",
+                        "default": True
+                    },
+                    "include_cloud": {
+                        "type": "boolean",
+                        "description": "Optional: Include iCloud photos (default: true). Set to false to only index local photos.",
+                        "default": True
+                    }
+                },
+                "required": []
+            }
+        ),
+        Tool(
+            name="get_job_status",
+            description="Get the current status and progress of an indexing job",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "job_id": {
+                        "type": "string",
+                        "description": "The job ID returned from start_indexing_job"
+                    }
+                },
+                "required": ["job_id"]
+            }
+        ),
+        Tool(
+            name="cancel_job",
+            description="Cancel a running indexing job. The job will stop after the current photo completes.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "job_id": {
+                        "type": "string",
+                        "description": "The job ID to cancel"
+                    }
+                },
+                "required": ["job_id"]
+            }
+        ),
+        Tool(
+            name="list_jobs",
+            description="List all indexing jobs (running, completed, and failed)",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
         )
     ]
 
 @app.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     try:
-        if name == "index_photo":
-            result = await index_photo(arguments["image_path"])
-            return [TextContent(
-                type="text",
-                text=f"Indexed: {result['path']}\nDescription: {result['description']}"
-            )]
-        
-        elif name == "search_photos":
+        if name == "search_photos":
             results = await search_photos(
                 arguments["query"],
                 arguments.get("n_results", 5)
@@ -454,13 +540,6 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             output += "\nTo view a photo, click the Link or use the get_photo tool with the UUID."
 
             return [TextContent(type="text", text=output)]
-        
-        elif name == "index_directory":
-            indexed = await index_directory(arguments["directory_path"])
-            return [TextContent(
-                type="text",
-                text=f"Indexed {len(indexed)} photos from {arguments['directory_path']}"
-            )]
 
         elif name == "get_photo":
             result = await get_photo(arguments["uuid"])
@@ -518,6 +597,94 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 arguments["photo_uuids"]
             )
             return [TextContent(type="text", text=result['message'])]
+
+        elif name == "start_indexing_job":
+            # Create new job
+            job_id = str(uuid.uuid4())
+            batch_size = arguments.get("batch_size")
+            reverse_chronological = arguments.get("reverse_chronological", True)
+            include_cloud = arguments.get("include_cloud", True)
+
+            job = IndexingJob(
+                job_id=job_id,
+                batch_size=batch_size,
+                reverse_chronological=reverse_chronological,
+                include_cloud=include_cloud
+            )
+            indexing_jobs[job_id] = job
+            job_cancel_flags[job_id] = False
+
+            # Start background task
+            asyncio.create_task(run_indexing_job_background(job_id))
+
+            logger.info(f"Created Apple Photos indexing job {job_id}")
+
+            sort_order = "newest first" if reverse_chronological else "oldest first"
+            cloud_status = "including iCloud" if include_cloud else "local only"
+
+            return [TextContent(
+                type="text",
+                text=f"Apple Photos indexing job started!\n\nJob ID: {job_id}\nBatch size: {batch_size if batch_size else 'all unindexed photos'}\nSort: {sort_order}\nScope: {cloud_status}\n\nUse get_job_status with this job_id to check progress.\n\nNote: Indexing is slow (~2-3 min per photo with LLaVA). The job will skip photos that are already indexed."
+            )]
+
+        elif name == "get_job_status":
+            job_id = arguments["job_id"]
+
+            if job_id not in indexing_jobs:
+                return [TextContent(type="text", text=f"Job {job_id} not found")]
+
+            job = indexing_jobs[job_id]
+            job_dict = job.to_dict()
+
+            # Format status message
+            output = f"Job Status: {job_dict['status'].upper()}\n\n"
+            output += f"Job ID: {job_dict['job_id']}\n"
+            output += f"Source: Apple Photos Library\n"
+            output += f"Progress: {job_dict['processed_photos']}/{job_dict['total_photos']} photos ({job_dict['progress_percent']}%)\n"
+
+            if job_dict['current_photo']:
+                output += f"Current: {job_dict['current_photo']}\n"
+
+            if job_dict['started_at']:
+                output += f"Started: {job_dict['started_at']}\n"
+
+            if job_dict['completed_at']:
+                output += f"Completed: {job_dict['completed_at']}\n"
+
+            if job_dict['error']:
+                output += f"\nError: {job_dict['error']}\n"
+
+            return [TextContent(type="text", text=output)]
+
+        elif name == "cancel_job":
+            job_id = arguments["job_id"]
+
+            if job_id not in indexing_jobs:
+                return [TextContent(type="text", text=f"Job {job_id} not found")]
+
+            job_cancel_flags[job_id] = True
+            logger.info(f"Cancellation requested for job {job_id}")
+
+            return [TextContent(
+                type="text",
+                text=f"Cancellation requested for job {job_id}. The job will stop after the current photo completes."
+            )]
+
+        elif name == "list_jobs":
+            if not indexing_jobs:
+                return [TextContent(type="text", text="No indexing jobs found.")]
+
+            output = f"Total jobs: {len(indexing_jobs)}\n\n"
+
+            for job_id, job in indexing_jobs.items():
+                job_dict = job.to_dict()
+                output += f"Job {job_id[:8]}...\n"
+                output += f"  Status: {job_dict['status']}\n"
+                output += f"  Progress: {job_dict['processed_photos']}/{job_dict['total_photos']} ({job_dict['progress_percent']}%)\n"
+                output += f"  Source: Apple Photos Library\n"
+                output += "\n"
+
+            return [TextContent(type="text", text=output)]
 
         else:
             raise ValueError(f"Unknown tool: {name}")

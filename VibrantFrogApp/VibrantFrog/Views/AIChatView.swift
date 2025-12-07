@@ -584,9 +584,17 @@ class AIChatViewModel: ObservableObject {
             do {
                 print("🔌 Connecting to MCP server: \(server.name) at \(server.url)")
                 print("🔌 MCP endpoint path: \(server.mcpEndpointPath ?? "default(/mcp)")")
+
+                // Construct full URL with endpoint path
+                var fullURL = server.url
+                if let endpointPath = server.mcpEndpointPath, !endpointPath.isEmpty && endpointPath != "default" {
+                    fullURL = server.url.hasSuffix("/") ? server.url + endpointPath : server.url + "/" + endpointPath
+                } else {
+                    fullURL = server.url.hasSuffix("/mcp") ? server.url : server.url + "/mcp"
+                }
+
                 let client = MCPClientHTTP(
-                    serverURL: URL(string: server.url)!,
-                    mcpEndpointPath: server.mcpEndpointPath
+                    serverURL: URL(string: fullURL)!
                 )
                 try await client.connect()
                 let tools = try await client.getTools()

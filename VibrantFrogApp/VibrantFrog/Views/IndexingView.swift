@@ -9,26 +9,44 @@
 import SwiftUI
 
 struct IndexingView: View {
+    var body: some View {
+        PhotoIndexingView()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+struct PhotoIndexingView: View {
     @EnvironmentObject var photoLibraryService: PhotoLibraryService
-    @EnvironmentObject var llmService: LLMService
+    @StateObject private var mcpClient = MCPClientHTTP()
 
     @State private var isIndexing: Bool = false
     @State private var indexingProgress: Double = 0
-    @State private var indexedCount: Int = 0
+    @State private var processedCount: Int = 0
     @State private var totalToIndex: Int = 0
-    @State private var currentPhotoDescription: String = ""
+    @State private var currentPhotoName: String = ""
     @State private var errorMessage: String?
     @State private var showStopConfirmation: Bool = false
+    @State private var batchSize: Int = 500
+    @State private var includeCloud: Bool = true
+    @State private var newestFirst: Bool = true
 
-    private var embeddingStore: EmbeddingStore? {
-        try? EmbeddingStore()
-    }
+    // Job management
+    @State private var currentJobId: String?
+    @State private var pollTimer: Timer?
+
+    // Statistics from cache file
+    @State private var indexedPhotosCount: Int = 0
 
     var body: some View {
         ScrollView {
             VStack(spacing: 24) {
                 // Status card
                 statusCard
+
+                // Settings card (when not indexing)
+                if !isIndexing {
+                    settingsCard
+                }
 
                 // Progress section (when indexing)
                 if isIndexing {
@@ -45,7 +63,20 @@ struct IndexingView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
-            updateStatistics()
+            print("📸 PhotoIndexingView: onAppear called")
+            print("📸 PhotoIndexingView: MCP connected = \(mcpClient.isConnected)")
+            print("📸 PhotoIndexingView: Photo Library authorized = \(photoLibraryService.isAuthorized)")
+        }
+        .task {
+            print("📸 PhotoIndexingView: .task modifier executing")
+            await setupMCPConnection()
+            loadIndexedCount()
+            print("📸 PhotoIndexingView: .task modifier complete")
+        }
+        .onDisappear {
+            print("📸 PhotoIndexingView: onDisappear called")
+            pollTimer?.invalidate()
+            pollTimer = nil
         }
     }
 
@@ -66,19 +97,60 @@ struct IndexingView: View {
                 Divider()
 
                 HStack {
-                    Image(systemName: llmService.isModelLoaded ? "checkmark.circle.fill" : "xmark.circle.fill")
-                        .foregroundStyle(llmService.isModelLoaded ? .green : .orange)
-                    Text("AI Model")
+                    Image(systemName: mcpClient.isConnected ? "checkmark.circle.fill" : "xmark.circle.fill")
+                        .foregroundStyle(mcpClient.isConnected ? .green : .orange)
+                    Text("MCP Server")
                     Spacer()
-                    Text(llmService.modelName)
+                    Text(mcpClient.isConnected ? "Connected" : "Not Connected")
                         .foregroundStyle(.secondary)
                 }
 
-                if !llmService.isModelLoaded {
-                    Text("Load a model in Settings to enable indexing")
+                if !mcpClient.isConnected {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("MCP server is required for Apple Photos indexing")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+
+                        Button("Retry Connection") {
+                            Task {
+                                await setupMCPConnection()
+                            }
+                        }
                         .font(.caption)
-                        .foregroundStyle(.orange)
+                        .buttonStyle(.borderless)
+                    }
                 }
+            }
+            .padding(.vertical, 8)
+        }
+    }
+
+    private var settingsCard: some View {
+        GroupBox("Indexing Settings") {
+            VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Batch Size")
+                        Spacer()
+                        TextField("Batch size", value: $batchSize, format: .number)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 100)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    Text("Number of photos to index (recommended: 100-500)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Divider()
+
+                Toggle("Include iCloud Photos", isOn: $includeCloud)
+                    .help("Include photos stored in iCloud (may require download)")
+
+                Divider()
+
+                Toggle("Index Newest First", isOn: $newestFirst)
+                    .help("Start with most recent photos for immediate value")
             }
             .padding(.vertical, 8)
         }
@@ -89,34 +161,39 @@ struct IndexingView: View {
             VStack(spacing: 16) {
                 ProgressView(value: indexingProgress) {
                     HStack {
-                        Text("Processing photos...")
+                        Text("Processing Apple Photos Library...")
                         Spacer()
-                        Text("\(indexedCount) / \(totalToIndex)")
+                        Text("\(processedCount) / \(totalToIndex)")
                             .monospacedDigit()
                     }
                 }
 
-                if !currentPhotoDescription.isEmpty {
-                    Text("Current: \(currentPhotoDescription)")
+                if !currentPhotoName.isEmpty {
+                    Text("Current: \(currentPhotoName)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }
 
-                Button("Stop Indexing") {
+                Text("Indexing is slow (~2-3 min per photo). Already-indexed photos are automatically skipped.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+
+                Button("Cancel Indexing") {
                     showStopConfirmation = true
                 }
                 .buttonStyle(.bordered)
             }
             .padding(.vertical, 8)
         }
-        .confirmationDialog("Stop Indexing?", isPresented: $showStopConfirmation) {
-            Button("Stop", role: .destructive) {
-                stopIndexing()
+        .confirmationDialog("Cancel Indexing?", isPresented: $showStopConfirmation) {
+            Button("Cancel Job", role: .destructive) {
+                cancelIndexing()
             }
             Button("Continue", role: .cancel) {}
         } message: {
-            Text("Progress will be saved. You can resume later.")
+            Text("Progress is saved after each photo. You can resume later.")
         }
     }
 
@@ -136,7 +213,7 @@ struct IndexingView: View {
                 HStack {
                     Label("Indexed Photos", systemImage: "checkmark.square.fill")
                     Spacer()
-                    Text("\(embeddingStore?.getIndexedCount() ?? 0)")
+                    Text("\(indexedPhotosCount)")
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                 }
@@ -146,19 +223,23 @@ struct IndexingView: View {
                 HStack {
                     Label("Remaining", systemImage: "square.dashed")
                     Spacer()
-                    let remaining = photoLibraryService.totalPhotoCount - (embeddingStore?.getIndexedCount() ?? 0)
+                    let remaining = photoLibraryService.totalPhotoCount - indexedPhotosCount
                     Text("\(max(0, remaining))")
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                 }
 
-                Divider()
+                if indexedPhotosCount > 0 {
+                    Divider()
 
-                HStack {
-                    Label("Database Size", systemImage: "internaldrive")
-                    Spacer()
-                    Text(formatBytes(embeddingStore?.databaseSize ?? 0))
-                        .foregroundStyle(.secondary)
+                    HStack {
+                        Label("Completion", systemImage: "chart.bar.fill")
+                        Spacer()
+                        let percent = photoLibraryService.totalPhotoCount > 0 ?
+                            Double(indexedPhotosCount) / Double(photoLibraryService.totalPhotoCount) * 100 : 0
+                        Text(String(format: "%.1f%%", percent))
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
             .padding(.vertical, 8)
@@ -177,6 +258,22 @@ struct IndexingView: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(!canStartIndexing)
 
+                // Debug info to show why button is disabled
+                if !canStartIndexing && !isIndexing {
+                    VStack(alignment: .leading, spacing: 4) {
+                        if !photoLibraryService.isAuthorized {
+                            Text("⚠️ Photo Library access not granted")
+                                .font(.caption2)
+                                .foregroundStyle(.orange)
+                        }
+                        if !mcpClient.isConnected {
+                            Text("⚠️ MCP server not connected")
+                                .font(.caption2)
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                }
+
                 if let error = errorMessage {
                     Text(error)
                         .font(.caption)
@@ -185,10 +282,10 @@ struct IndexingView: View {
 
                 Divider()
 
-                Button(role: .destructive) {
-                    clearIndex()
+                Button {
+                    loadIndexedCount()
                 } label: {
-                    Label("Clear Index", systemImage: "trash")
+                    Label("Refresh Statistics", systemImage: "arrow.clockwise")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
@@ -202,104 +299,266 @@ struct IndexingView: View {
 
     private var canStartIndexing: Bool {
         photoLibraryService.isAuthorized &&
-        llmService.isModelLoaded &&
+        mcpClient.isConnected &&
         !isIndexing
     }
 
-    private func formatBytes(_ bytes: Int64) -> String {
-        let formatter = ByteCountFormatter()
-        formatter.countStyle = .file
-        return formatter.string(fromByteCount: bytes)
-    }
+    // MARK: - MCP Actions
 
-    private func updateStatistics() {
-        // Refresh counts
-        photoLibraryService.requestAuthorization()
-    }
+    private func setupMCPConnection() async {
+        guard !mcpClient.isConnected else {
+            print("🔌 setupMCPConnection: Already connected, skipping")
+            return
+        }
 
-    // MARK: - Actions
+        print("🔌 setupMCPConnection: Attempting to connect to MCP server...")
+        do {
+            try await mcpClient.connect()
+            print("✅ setupMCPConnection: Connection successful!")
+        } catch {
+            print("❌ setupMCPConnection: Connection failed: \(error)")
+            await MainActor.run {
+                errorMessage = "Failed to connect to MCP server: \(error.localizedDescription)"
+            }
+        }
+    }
 
     private func startIndexing() {
         guard canStartIndexing else { return }
 
-        isIndexing = true
-        errorMessage = nil
-        indexedCount = 0
-
         Task {
             do {
-                let store = try EmbeddingStore()
-                _ = store.getIndexedCount()
+                // Build arguments
+                var args: [String: Any] = ["batch_size": batchSize]
+                args["reverse_chronological"] = newestFirst
+                args["include_cloud"] = includeCloud
 
-                // Get all photos
-                let photos = photoLibraryService.fetchAllPhotos()
-                totalToIndex = photos.count
+                // Call start_indexing_job
+                let result = try await mcpClient.callTool(
+                    name: "start_indexing_job",
+                    arguments: args
+                )
 
-                for (index, photo) in photos.enumerated() {
-                    // Check if already indexed
-                    if store.isIndexed(photoId: photo.id) {
-                        continue
-                    }
-
-                    // Check if stopped
-                    if !isIndexing { break }
-
-                    // Load image data
-                    guard let imageData = await photoLibraryService.loadImageData(for: photo) else {
-                        continue
-                    }
-
-                    // Generate description
-                    let description = try await llmService.describeImage(imageData: imageData)
-
-                    // Generate embedding
-                    let embedding = try await llmService.generateEmbedding(for: description)
-
-                    // Store
-                    try store.storeEmbedding(
-                        photoId: photo.id,
-                        description: description,
-                        embedding: embedding
-                    )
-
+                // Extract job_id from result
+                if let jobId = extractJobId(from: result) {
                     await MainActor.run {
-                        indexedCount = index + 1
-                        indexingProgress = Double(indexedCount) / Double(totalToIndex)
-                        currentPhotoDescription = description
+                        currentJobId = jobId
+                        isIndexing = true
+                        errorMessage = nil
+                        processedCount = 0
+                        totalToIndex = 0
+                        currentPhotoName = ""
                     }
-                }
 
-                await MainActor.run {
-                    isIndexing = false
-                    currentPhotoDescription = ""
+                    // Start polling for progress
+                    startPolling()
+                } else {
+                    await MainActor.run {
+                        errorMessage = "Failed to start indexing job"
+                    }
                 }
             } catch {
                 await MainActor.run {
-                    isIndexing = false
-                    errorMessage = error.localizedDescription
+                    errorMessage = "Failed to start indexing: \(error.localizedDescription)"
                 }
             }
         }
     }
 
-    private func stopIndexing() {
-        isIndexing = false
+    private func extractJobId(from result: ToolCallResult) -> String? {
+        // Look for job_id in the text content
+        for content in result.content {
+            if content.type == "text", let text = content.text {
+                // Parse job_id from text like "Job ID: abc-123..."
+                if let range = text.range(of: "Job ID: "),
+                   let endRange = text.range(of: "\n", range: range.upperBound..<text.endIndex) {
+                    let jobId = String(text[range.upperBound..<endRange.lowerBound])
+                    return jobId
+                }
+            }
+        }
+        return nil
     }
 
-    private func clearIndex() {
-        do {
-            let store = try EmbeddingStore()
-            try store.clearAll()
-            updateStatistics()
-        } catch {
-            errorMessage = error.localizedDescription
+    private func startPolling() {
+        // Poll every 2 seconds
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
+            Task { @MainActor in
+                await self.updateStatus()
+            }
         }
     }
+
+    private func updateStatus() async {
+        guard let jobId = currentJobId else { return }
+
+        do {
+            let result = try await mcpClient.callTool(
+                name: "get_job_status",
+                arguments: ["job_id": jobId]
+            )
+
+            // Parse status from result
+            if let statusInfo = parseJobStatus(from: result) {
+                await MainActor.run {
+                    processedCount = statusInfo.processedPhotos
+                    totalToIndex = statusInfo.totalPhotos
+                    currentPhotoName = statusInfo.currentPhoto ?? ""
+
+                    if totalToIndex > 0 {
+                        indexingProgress = Double(processedCount) / Double(totalToIndex)
+                    }
+
+                    // Refresh indexed count every 10 photos during active indexing
+                    if statusInfo.status == "running" && processedCount % 10 == 0 {
+                        loadIndexedCount()
+                    }
+
+                    // Check if job is done
+                    if statusInfo.status == "completed" ||
+                       statusInfo.status == "failed" ||
+                       statusInfo.status == "cancelled" {
+                        stopPolling()
+                        isIndexing = false
+                        currentJobId = nil
+
+                        // Refresh statistics
+                        loadIndexedCount()
+
+                        if statusInfo.status == "failed" {
+                            errorMessage = "Indexing job failed"
+                        }
+                    }
+                }
+            }
+        } catch {
+            await MainActor.run {
+                errorMessage = "Failed to get job status: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func parseJobStatus(from result: ToolCallResult) -> JobStatusInfo? {
+        // Parse the text content to extract status information
+        for content in result.content {
+            if content.type == "text", let text = content.text {
+                var status = ""
+                var processedPhotos = 0
+                var totalPhotos = 0
+                var currentPhoto: String?
+
+                // Parse status line by line
+                let lines = text.components(separatedBy: "\n")
+                for line in lines {
+                    if line.contains("Job Status:") {
+                        let parts = line.components(separatedBy: ": ")
+                        if parts.count > 1 {
+                            status = parts[1].trimmingCharacters(in: .whitespaces).lowercased()
+                        }
+                    } else if line.contains("Progress:") {
+                        // Parse "Progress: 10/500 photos (2.0%)"
+                        if let range = line.range(of: "Progress: ") {
+                            let progressStr = String(line[range.upperBound...])
+                            let components = progressStr.components(separatedBy: "/")
+                            if components.count > 1 {
+                                processedPhotos = Int(components[0].trimmingCharacters(in: .whitespaces)) ?? 0
+                                let totalStr = components[1].components(separatedBy: " ")[0]
+                                totalPhotos = Int(totalStr.trimmingCharacters(in: .whitespaces)) ?? 0
+                            }
+                        }
+                    } else if line.contains("Current:") {
+                        let parts = line.components(separatedBy: ": ")
+                        if parts.count > 1 {
+                            currentPhoto = parts[1].trimmingCharacters(in: .whitespaces)
+                        }
+                    }
+                }
+
+                return JobStatusInfo(
+                    status: status,
+                    processedPhotos: processedPhotos,
+                    totalPhotos: totalPhotos,
+                    currentPhoto: currentPhoto
+                )
+            }
+        }
+        return nil
+    }
+
+    private func stopPolling() {
+        pollTimer?.invalidate()
+        pollTimer = nil
+    }
+
+    private func cancelIndexing() {
+        guard let jobId = currentJobId else { return }
+
+        Task {
+            do {
+                _ = try await mcpClient.callTool(
+                    name: "cancel_job",
+                    arguments: ["job_id": jobId]
+                )
+
+                await MainActor.run {
+                    stopPolling()
+                    isIndexing = false
+                    currentJobId = nil
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = "Failed to cancel job: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    private func loadIndexedCount() {
+        // Load from the cache file
+        let cachePath = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/VibrantFrogMCP/indexed_photos.json")
+
+        if FileManager.default.fileExists(atPath: cachePath.path) {
+            do {
+                let data = try Data(contentsOf: cachePath)
+                if let uuids = try JSONSerialization.jsonObject(with: data) as? [String] {
+                    DispatchQueue.main.async {
+                        self.indexedPhotosCount = uuids.count
+                        print("📊 Loaded indexed count from cache: \(uuids.count)")
+                    }
+                }
+            } catch {
+                print("Failed to load indexed photos count: \(error)")
+                DispatchQueue.main.async {
+                    self.indexedPhotosCount = 0
+                }
+            }
+        } else {
+            print("📊 Cache file not found, setting count to 0")
+            DispatchQueue.main.async {
+                self.indexedPhotosCount = 0
+            }
+        }
+    }
+}
+
+// MARK: - Helper Types
+
+struct JobStatusInfo {
+    let status: String
+    let processedPhotos: Int
+    let totalPhotos: Int
+    let currentPhoto: String?
 }
 
 #Preview {
     IndexingView()
         .environmentObject(PhotoLibraryService())
-        .environmentObject(LLMService())
-        .frame(width: 500, height: 600)
+        .frame(width: 600, height: 700)
+}
+
+#Preview("Photo Indexing") {
+    PhotoIndexingView()
+        .environmentObject(PhotoLibraryService())
+        .frame(width: 500, height: 700)
 }

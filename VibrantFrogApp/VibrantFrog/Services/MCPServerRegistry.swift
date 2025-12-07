@@ -121,10 +121,17 @@ class MCPServerRegistry: ObservableObject {
 
         for server in servers where server.isEnabled {
             do {
-                // Create temporary client for this server with custom endpoint path
+                // Create temporary client for this server
+                // Construct full URL with endpoint path
+                var fullURL = server.url
+                if let endpointPath = server.mcpEndpointPath, !endpointPath.isEmpty && endpointPath != "default" {
+                    fullURL = server.url.hasSuffix("/") ? server.url + endpointPath : server.url + "/" + endpointPath
+                } else {
+                    fullURL = server.url.hasSuffix("/mcp") ? server.url : server.url + "/mcp"
+                }
+
                 let client = MCPClientHTTP(
-                    serverURL: URL(string: server.url)!,
-                    mcpEndpointPath: server.mcpEndpointPath
+                    serverURL: URL(string: fullURL)!
                 )
                 try await client.connect()
 
@@ -157,9 +164,16 @@ class MCPServerRegistry: ObservableObject {
 
     func getToolsForServer(_ server: MCPServer) async -> [RegistryMCPTool] {
         do {
+            // Construct full URL with endpoint path
+            var fullURL = server.url
+            if let endpointPath = server.mcpEndpointPath, !endpointPath.isEmpty && endpointPath != "default" {
+                fullURL = server.url.hasSuffix("/") ? server.url + endpointPath : server.url + "/" + endpointPath
+            } else {
+                fullURL = server.url.hasSuffix("/mcp") ? server.url : server.url + "/mcp"
+            }
+
             let client = MCPClientHTTP(
-                serverURL: URL(string: server.url)!,
-                mcpEndpointPath: server.mcpEndpointPath
+                serverURL: URL(string: fullURL)!
             )
             try await client.connect()
 

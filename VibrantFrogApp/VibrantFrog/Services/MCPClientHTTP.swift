@@ -19,49 +19,31 @@ class MCPClientHTTP: ObservableObject {
     private var process: Process?
     private var session: URLSession
     private var nextRequestId = 1
-    private let serverURL: URL
-    private let mcpEndpoint: URL
+    private let baseServerURL: URL  // Base URL for server check (without endpoint path)
+    private let mcpEndpoint: URL    // Complete MCP endpoint URL (as provided by user)
     private let pythonPath: String
     private let serverScriptPath: String
     private var sessionId: String?
 
     convenience init() {
-        self.init(serverURL: URL(string: "http://127.0.0.1:5050")!)
+        // Default server with complete path including /mcp endpoint
+        self.init(serverURL: URL(string: "http://127.0.0.1:5050/mcp")!)
     }
 
     init(
         serverURL: URL,
         pythonPath: String = "/usr/bin/python3",
-        serverScriptPath: String = "/Users/tpiazza/git/VibrantFrogMCP/vibrant_frog_mcp.py",
-        mcpEndpointPath: String? = nil
+        serverScriptPath: String = "/Users/tpiazza/git/VibrantFrogMCP/vibrant_frog_mcp.py"
     ) {
-        // Check if serverURL already contains a path (e.g., http://127.0.0.1:5050/mcp)
-        // If it does, use it as-is. Otherwise, append the endpoint path.
-        let hasPath = !serverURL.path.isEmpty && serverURL.path != "/"
+        // Use the complete URL as provided by the user - DO NOT append /mcp
+        self.mcpEndpoint = serverURL
 
-        if hasPath {
-            // URL already includes the endpoint path - use it directly
-            self.mcpEndpoint = serverURL
-            // Extract base URL for health checks
-            var components = URLComponents(url: serverURL, resolvingAgainstBaseURL: false)
-            components?.path = ""
-            components?.query = nil
-            components?.fragment = nil
-            self.serverURL = components?.url ?? serverURL
-        } else {
-            // URL is just host:port - append endpoint path
-            self.serverURL = serverURL
-            if let customPath = mcpEndpointPath {
-                // If the custom path is empty, use the base URL directly
-                if customPath.isEmpty {
-                    self.mcpEndpoint = serverURL
-                } else {
-                    self.mcpEndpoint = serverURL.appendingPathComponent(customPath)
-                }
-            } else {
-                self.mcpEndpoint = serverURL.appendingPathComponent("mcp")
-            }
-        }
+        // Extract base URL (scheme + host + port) for server health checks
+        var components = URLComponents(url: serverURL, resolvingAgainstBaseURL: false)
+        components?.path = ""
+        components?.query = nil
+        components?.fragment = nil
+        self.baseServerURL = components?.url ?? serverURL
 
         self.pythonPath = pythonPath
         self.serverScriptPath = serverScriptPath
@@ -75,51 +57,53 @@ class MCPClientHTTP: ObservableObject {
     // MARK: - Connection Management
 
     func connect() async throws {
-        print("🌐 MCPClientHTTP: Attempting to connect to \(serverURL)")
-        print("🌐 MCPClientHTTP: MCP endpoint will be \(mcpEndpoint)")
+        print("🔌 MCPClientHTTP: Starting connection process...")
+        print("🔌 MCPClientHTTP: Base server URL: \(baseServerURL)")
+        print("🔌 MCPClientHTTP: MCP endpoint: \(mcpEndpoint)")
 
-        // Determine if this is a remote server (https:// or not localhost)
-        let isRemoteServer = serverURL.scheme == "https" ||
-                            (!(serverURL.host()?.contains("localhost") ?? false) &&
-                             !(serverURL.host()?.contains("127.0.0.1") ?? false))
+        // Check if server is already running
+        print("🔌 MCPClientHTTP: Checking if server is alive...")
+        let serverAlreadyRunning = await checkServerAlive()
+        print("🔌 MCPClientHTTP: Server alive check result: \(serverAlreadyRunning)")
 
-        if isRemoteServer {
-            print("🌐 MCPClientHTTP: Detected remote server, skipping local Python server startup")
+        if !serverAlreadyRunning {
+            print("🔌 MCPClientHTTP: Starting Python MCP server...")
+            print("🔌 MCPClientHTTP: Python path: \(pythonPath)")
+            print("🔌 MCPClientHTTP: Script path: \(serverScriptPath)")
+
+            // Start Python MCP server in HTTP mode
+            try startHTTPServer()
+            print("🔌 MCPClientHTTP: Server process started, waiting 2 seconds...")
+
+            // Wait for server to start
+            try await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
+            print("🔌 MCPClientHTTP: Wait complete")
         } else {
-            // Check if server is already running
-            let serverAlreadyRunning = await checkServerAlive()
-            print("🌐 MCPClientHTTP: Server alive check result: \(serverAlreadyRunning)")
-
-            if !serverAlreadyRunning {
-                print("🌐 MCPClientHTTP: Server not detected, attempting to start local Python server")
-                // Start Python MCP server in HTTP mode
-                try startHTTPServer()
-
-                // Wait for server to start
-                try await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
-            } else {
-                print("🌐 MCPClientHTTP: Server already running, connecting to existing instance")
-            }
+            print("🌐 MCPClientHTTP: Server already running, connecting to existing instance")
         }
 
         // Initialize MCP session
-        print("🌐 MCPClientHTTP: Sending initialize request")
+        print("🔌 MCPClientHTTP: Initializing MCP session...")
         try await initialize()
-        print("🌐 MCPClientHTTP: Initialize successful, loading tools")
+        print("✅ MCPClientHTTP: Session initialized")
 
         // Load available tools
+        print("🔌 MCPClientHTTP: Loading available tools...")
         try await loadTools()
-        print("🌐 MCPClientHTTP: Tools loaded successfully")
+        print("✅ MCPClientHTTP: Tools loaded: \(availableTools.count) tools")
 
         await MainActor.run {
             self.isConnected = true
             self.errorMessage = nil
         }
+
+        print("✅ MCPClientHTTP: Connection complete!")
     }
 
     private func checkServerAlive() async -> Bool {
         // Try a simple HTTP request to see if server is responding
-        var request = URLRequest(url: serverURL)
+        // Use base URL for health check
+        var request = URLRequest(url: baseServerURL)
         request.httpMethod = "GET"
         request.timeoutInterval = 1.0
 
@@ -214,11 +198,6 @@ class MCPClientHTTP: ObservableObject {
         let request = MCPRequest(id: id, method: method, params: params)
         let requestData = try JSONEncoder().encode(request)
 
-        print("📤 MCPClientHTTP: Sending \(method) request to \(mcpEndpoint)")
-        if let requestJSON = String(data: requestData, encoding: .utf8) {
-            print("📤 Request body: \(requestJSON)")
-        }
-
         // Create HTTP POST request to /mcp endpoint
         var urlRequest = URLRequest(url: mcpEndpoint)
         urlRequest.httpMethod = "POST"
@@ -229,79 +208,41 @@ class MCPClientHTTP: ObservableObject {
         // Add session ID if we have one
         if let sessionId = sessionId {
             urlRequest.setValue(sessionId, forHTTPHeaderField: "Mcp-Session-Id")
-            print("📤 Using session ID: \(sessionId)")
         }
 
         // Send the request
-        do {
-            let (responseData, response) = try await session.data(for: urlRequest)
+        let (responseData, response) = try await session.data(for: urlRequest)
 
-            guard let httpResponse = response as? HTTPURLResponse else {
-                print("❌ MCPClientHTTP: Invalid response type")
-                throw MCPClientError.invalidResponse
-            }
-
-            print("📥 MCPClientHTTP: Received response with status \(httpResponse.statusCode)")
-            if let responseJSON = String(data: responseData, encoding: .utf8) {
-                print("📥 Response body: \(responseJSON)")
-            }
-
-            // Check for session ID in response (on initialize)
-            if method == "initialize", let newSessionId = httpResponse.value(forHTTPHeaderField: "Mcp-Session-Id") {
-                print("✅ Received new session ID: \(newSessionId)")
-                await MainActor.run {
-                    self.sessionId = newSessionId
-                }
-            }
-
-            guard httpResponse.statusCode == 200 else {
-                print("❌ MCPClientHTTP: HTTP error \(httpResponse.statusCode)")
-                throw MCPClientError.serverError(
-                    code: httpResponse.statusCode,
-                    message: "HTTP \(httpResponse.statusCode)"
-                )
-            }
-
-            // Try to parse as MCP JSON-RPC response
-            do {
-                let mcpResponse = try JSONDecoder().decode(MCPResponse<R>.self, from: responseData)
-
-                if let error = mcpResponse.error {
-                    print("❌ MCPClientHTTP: MCP error \(error.code): \(error.message)")
-                    throw MCPClientError.serverError(code: error.code, message: error.message)
-                }
-
-                guard let result = mcpResponse.result else {
-                    print("❌ MCPClientHTTP: No result in response")
-                    throw MCPClientError.invalidResponse
-                }
-
-                print("✅ MCPClientHTTP: Successfully parsed response for \(method)")
-                return result
-            } catch {
-                // If JSON-RPC parsing fails, check if this is an AWS API Gateway error or other non-MCP response
-                if let jsonObject = try? JSONSerialization.jsonObject(with: responseData) as? [String: Any] {
-                    if let output = jsonObject["Output"] as? [String: Any],
-                       let errorType = output["__type"] as? String {
-                        print("❌ MCPClientHTTP: AWS API Gateway error: \(errorType)")
-                        throw MCPClientError.serverError(
-                            code: httpResponse.statusCode,
-                            message: "This endpoint returned an AWS API Gateway error (\(errorType)). It does not appear to be a valid MCP server. Please verify the URL is correct and points to an MCP-compatible endpoint."
-                        )
-                    }
-                }
-
-                print("❌ MCPClientHTTP: Failed to parse MCP JSON-RPC response: \(error.localizedDescription)")
-                print("📄 Response was: \(String(data: responseData, encoding: .utf8) ?? "unable to decode")")
-                throw MCPClientError.invalidResponse
-            }
-
-        } catch let error as MCPClientError {
-            throw error
-        } catch {
-            print("❌ MCPClientHTTP: Network error: \(error.localizedDescription)")
-            throw error
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw MCPClientError.invalidResponse
         }
+
+        // Check for session ID in response (on initialize)
+        if method == "initialize", let newSessionId = httpResponse.value(forHTTPHeaderField: "Mcp-Session-Id") {
+            await MainActor.run {
+                self.sessionId = newSessionId
+            }
+        }
+
+        guard httpResponse.statusCode == 200 else {
+            throw MCPClientError.serverError(
+                code: httpResponse.statusCode,
+                message: "HTTP \(httpResponse.statusCode)"
+            )
+        }
+
+        // Parse JSON response
+        let mcpResponse = try JSONDecoder().decode(MCPResponse<R>.self, from: responseData)
+
+        if let error = mcpResponse.error {
+            throw MCPClientError.serverError(code: error.code, message: error.message)
+        }
+
+        guard let result = mcpResponse.result else {
+            throw MCPClientError.invalidResponse
+        }
+
+        return result
     }
 
     // MARK: - Helper for sending notifications (no response expected)
