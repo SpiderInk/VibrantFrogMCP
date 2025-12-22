@@ -36,6 +36,7 @@ struct PhotoIndexingView: View {
 
     // Statistics from cache file
     @State private var indexedPhotosCount: Int = 0
+    @State private var hasLoggedCacheMissing: Bool = false
 
     var body: some View {
         ScrollView {
@@ -514,27 +515,59 @@ struct PhotoIndexingView: View {
     }
 
     private func loadIndexedCount() {
+        print("🔍 loadIndexedCount() called")
+
         // Load from the cache file
         let cachePath = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/VibrantFrogMCP/indexed_photos.json")
 
-        if FileManager.default.fileExists(atPath: cachePath.path) {
+        // Use path(percentEncoded: false) for macOS 14+ compatibility
+        let pathString: String
+        if #available(macOS 13, *) {
+            pathString = cachePath.path(percentEncoded: false)
+        } else {
+            pathString = cachePath.path
+        }
+
+        print("🔍 Cache path: \(pathString)")
+
+        let fileExists = FileManager.default.fileExists(atPath: pathString)
+        print("🔍 File exists check: \(fileExists)")
+
+        if fileExists {
+            print("🔍 Attempting to read cache file...")
             do {
                 let data = try Data(contentsOf: cachePath)
+                print("🔍 Read \(data.count) bytes from cache file")
+
                 if let uuids = try JSONSerialization.jsonObject(with: data) as? [String] {
+                    print("🔍 Successfully parsed JSON array with \(uuids.count) UUIDs")
+
                     DispatchQueue.main.async {
+                        print("🔍 Updating indexedPhotosCount from \(self.indexedPhotosCount) to \(uuids.count)")
                         self.indexedPhotosCount = uuids.count
-                        print("📊 Loaded indexed count from cache: \(uuids.count)")
+                        print("📊 Updated indexed count to: \(self.indexedPhotosCount)")
+                    }
+                } else {
+                    print("❌ Failed to parse JSON as array of strings")
+                    DispatchQueue.main.async {
+                        self.indexedPhotosCount = 0
                     }
                 }
             } catch {
-                print("Failed to load indexed photos count: \(error)")
+                print("❌ Failed to load indexed photos count: \(error)")
                 DispatchQueue.main.async {
                     self.indexedPhotosCount = 0
                 }
             }
         } else {
-            print("📊 Cache file not found, setting count to 0")
+            // Only log once when we first notice the file is missing
+            if !hasLoggedCacheMissing {
+                print("📊 Cache file not found at: \(pathString)")
+                DispatchQueue.main.async {
+                    self.hasLoggedCacheMissing = true
+                }
+            }
             DispatchQueue.main.async {
                 self.indexedPhotosCount = 0
             }
