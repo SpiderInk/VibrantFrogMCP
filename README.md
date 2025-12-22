@@ -109,14 +109,67 @@ open VibrantFrogApp/VibrantFrog.xcodeproj
 # Build and run (⌘R)
 ```
 
-### 3. Configure MCP Servers (Optional)
+### 3. Set Up the Photo Search MCP Server
 
-VibrantFrog comes with built-in support for various MCP servers:
+VibrantFrog includes a powerful **Python MCP server** for searching your Apple Photos library.
 
-**AWS MCP Server:**
+📖 **[Full MCP Server Setup Guide](MCP_SERVER_SETUP.md)** - Detailed instructions for VibrantFrog app and Claude Desktop
+
+**Quick Setup:**
+
+#### Install Python Dependencies
+
+```bash
+cd /path/to/VibrantFrogMCP
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+#### Run the MCP Server
+
+**Option A: Start Server Manually (HTTP mode)**
+```bash
+python3 vibrant_frog_mcp.py --transport http
+```
+The server will start on `http://127.0.0.1:5050/mcp`
+
+**Option B: Use with Claude Desktop (stdio mode)**
+
+Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+```json
+{
+  "mcpServers": {
+    "vibrantfrog-photos": {
+      "command": "python3",
+      "args": [
+        "/path/to/VibrantFrogMCP/vibrant_frog_mcp.py"
+      ]
+    }
+  }
+}
+```
+
+#### Configure in VibrantFrog
+
+1. The built-in "VibrantFrog Photos" server is pre-configured
+2. Make sure the Python server is running (`python3 vibrant_frog_mcp.py --transport http`)
+3. Go to "MCP Server" tab and verify the server shows as "Connected" (green indicator)
+4. Click "Refresh" to load available tools
+
+**Available Photo Tools:**
+- `search_photos` - Search your photos using natural language
+- `get_photo` - Retrieve a specific photo by UUID
+- `create_album` - Create a new Apple Photos album
+- `add_photos_to_album` - Add photos to an album
+- `list_albums` - List all your albums
+
+### 4. Configure Additional MCP Servers (Optional)
+
+**AWS Knowledge Base:**
 ```
 URL: https://knowledge-mcp.global.api.aws
-Path: /mcp
+Path: (leave empty)
 ```
 
 **Custom MCP Servers:**
