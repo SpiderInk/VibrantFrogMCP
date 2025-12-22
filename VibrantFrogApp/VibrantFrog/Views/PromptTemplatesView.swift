@@ -9,8 +9,7 @@ import SwiftUI
 
 struct PromptTemplatesView: View {
     @StateObject private var store = PromptTemplateStore()
-    @State private var selectedTemplate: PromptTemplate?
-    @State private var showingEditor = false
+    @State private var editingTemplate: PromptTemplate?
     @State private var showingNewTemplate = false
     @State private var showingVariables = false
 
@@ -45,10 +44,8 @@ struct PromptTemplatesView: View {
                 templatesGrid
             }
         }
-        .sheet(isPresented: $showingEditor) {
-            if let template = selectedTemplate {
-                PromptTemplateEditor(template: template, store: store)
-            }
+        .sheet(item: $editingTemplate) { template in
+            PromptTemplateEditor(template: template, store: store)
         }
         .sheet(isPresented: $showingNewTemplate) {
             NewPromptTemplateSheet(store: store)
@@ -66,13 +63,11 @@ struct PromptTemplatesView: View {
                 ForEach(store.templates) { template in
                     TemplateCard(template: template)
                         .onTapGesture(count: 2) {
-                            selectedTemplate = template
-                            showingEditor = true
+                            editingTemplate = template
                         }
                         .contextMenu {
                             Button("Edit") {
-                                selectedTemplate = template
-                                showingEditor = true
+                                editingTemplate = template
                             }
 
                             if !template.isBuiltIn {

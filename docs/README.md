@@ -15,21 +15,9 @@ Complete documentation for VibrantFrog - Native macOS AI Chat with MCP Integrati
 - **[CONTRIBUTING.md](../CONTRIBUTING.md)** - How to contribute to VibrantFrog
 - **[ARCHITECTURE.md](../ARCHITECTURE.md)** - Technical architecture and design decisions
 
-### For Maintainers
-
-- **[DISTRIBUTION_PLAN.md](../DISTRIBUTION_PLAN.md)** - Complete distribution strategy and roadmap
-- **[RELEASE_CHECKLIST.md](../RELEASE_CHECKLIST.md)** - Internal release process checklist
-
-## Technical Documentation
-
-- **[FEATURES_GUIDE.md](./FEATURES_GUIDE.md)** - Detailed feature documentation
-- **[JOB_MANAGEMENT_API.md](./JOB_MANAGEMENT_API.md)** - Photo indexing job API
-- **[PHOTO_SEARCH_INTEGRATION_PLAN.md](./PHOTO_SEARCH_INTEGRATION_PLAN.md)** - Photo search architecture
-- **[MCP_EMBEDDING_ANALYSIS.md](./MCP_EMBEDDING_ANALYSIS.md)** - Embedding system details
-
 ## Archived Documentation
 
-The `archive/` directory contains historical development notes, fix logs, and implementation guides from the project's evolution. These are kept for reference but may not reflect the current state of the application.
+The `archive/` directory contains historical development notes, planning documents, fix logs, and implementation guides from the project's evolution. These are kept for reference but may not reflect the current state of the application.
 
 ## Getting Started
 

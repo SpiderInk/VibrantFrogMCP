@@ -694,9 +694,18 @@ class AIChatViewModel: ObservableObject {
 
                 // Construct full URL with endpoint path
                 var fullURL = selectedServer.url
-                if let endpointPath = selectedServer.mcpEndpointPath, !endpointPath.isEmpty && endpointPath != "default" {
-                    fullURL = selectedServer.url.hasSuffix("/") ? selectedServer.url + endpointPath : selectedServer.url + "/" + endpointPath
+                if let endpointPath = selectedServer.mcpEndpointPath {
+                    // If endpoint path is explicitly set to empty string, use URL as-is
+                    if endpointPath.isEmpty {
+                        fullURL = selectedServer.url
+                    } else if endpointPath != "default" {
+                        fullURL = selectedServer.url.hasSuffix("/") ? selectedServer.url + endpointPath : selectedServer.url + "/" + endpointPath
+                    } else {
+                        // "default" means append /mcp
+                        fullURL = selectedServer.url.hasSuffix("/mcp") ? selectedServer.url : selectedServer.url + "/mcp"
+                    }
                 } else {
+                    // No endpoint path specified, default to appending /mcp
                     fullURL = selectedServer.url.hasSuffix("/mcp") ? selectedServer.url : selectedServer.url + "/mcp"
                 }
 
@@ -913,6 +922,10 @@ class AIChatViewModel: ObservableObject {
         }
 
         current.selectedModel = ollamaService.selectedModel
+
+        // Auto-generate title from first user message if still "New Conversation"
+        current.updateTitleFromFirstMessage()
+
         store.updateCurrentConversation(current)
     }
 

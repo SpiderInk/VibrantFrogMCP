@@ -56,13 +56,16 @@ struct MCPManagementView: View {
             .frame(minWidth: 200, maxWidth: 300)
 
             // Right panel: Server details
-            if let server = selectedServer {
+            if let selectedServer = selectedServer {
                 ServerDetailView(
                     server: Binding(
-                        get: { server },
+                        get: {
+                            // Always fetch the latest server from registry to get updated status
+                            registry.servers.first(where: { $0.id == selectedServer.id }) ?? selectedServer
+                        },
                         set: { newServer in
                             registry.updateServer(newServer)
-                            selectedServer = newServer
+                            self.selectedServer = newServer
                         }
                     ),
                     registry: registry
@@ -139,7 +142,6 @@ struct ServerDetailView: View {
     @ObservedObject var registry: MCPServerRegistry
     @State private var tools: [RegistryMCPTool] = []
     @State private var isLoadingTools = false
-    @State private var editingPrompt = false
 
     var body: some View {
         ScrollView {
@@ -174,57 +176,6 @@ struct ServerDetailView: View {
                                 }
                                 .buttonStyle(.bordered)
                             }
-                        }
-                    }
-                    .padding()
-                }
-
-                // Custom prompt section
-                GroupBox("Custom System Prompt") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Add custom instructions for tools from this server")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-
-                        if editingPrompt {
-                            TextEditor(text: Binding(
-                                get: { server.customPrompt ?? "" },
-                                set: { server.customPrompt = $0.isEmpty ? nil : $0 }
-                            ))
-                            .font(.system(.body, design: .monospaced))
-                            .frame(minHeight: 100)
-                            .border(Color.secondary.opacity(0.2))
-
-                            HStack {
-                                Button("Cancel") {
-                                    editingPrompt = false
-                                }
-                                Spacer()
-                                Button("Save") {
-                                    registry.updateCustomPrompt(serverID: server.id, prompt: server.customPrompt)
-                                    editingPrompt = false
-                                }
-                                .buttonStyle(.borderedProminent)
-                            }
-                        } else {
-                            if let prompt = server.customPrompt, !prompt.isEmpty {
-                                Text(prompt)
-                                    .font(.system(.caption, design: .monospaced))
-                                    .padding(8)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .background(Color(nsColor: .controlBackgroundColor))
-                                    .cornerRadius(4)
-                            } else {
-                                Text("No custom prompt set")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .italic()
-                            }
-
-                            Button(server.customPrompt == nil ? "Add Prompt" : "Edit Prompt") {
-                                editingPrompt = true
-                            }
-                            .buttonStyle(.bordered)
                         }
                     }
                     .padding()
@@ -388,7 +339,7 @@ struct AddServerSheet: View {
     @Environment(\.dismiss) var dismiss
     @State private var name = ""
     @State private var url = "http://127.0.0.1:5050"
-    @State private var endpointPath = "/mcp"
+    @State private var endpointPath = ""
 
     var body: some View {
         VStack(spacing: 20) {
@@ -412,7 +363,7 @@ struct AddServerSheet: View {
                         .textFieldStyle(.roundedBorder)
                 }
 
-                Text("Leave endpoint path as '/mcp' for standard MCP servers. Use empty string if the URL is the complete endpoint.")
+                Text("Enter '/mcp' for standard servers, leave EMPTY if the URL already includes the endpoint path, or enter a custom path.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

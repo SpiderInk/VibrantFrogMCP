@@ -9,6 +9,34 @@ VibrantFrog brings AI-powered conversations to your Mac with full support for MC
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![SwiftUI](https://img.shields.io/badge/SwiftUI-Native-purple.svg)
 
+## Demo
+
+![VibrantFrog Demo](assets/demo/demo.gif)
+*AI-powered photo search in action - ask questions, get results with thumbnails*
+
+## Screenshots
+
+### AI Chat with Photo Intelligence
+![VibrantFrog AI Chat](assets/screenshots/hero.png)
+*Chat interface showing photo search with natural language queries and thumbnail results*
+
+### MCP Server Management
+![MCP Server Configuration](assets/screenshots/mcp-management.png)
+*Connect to MCP servers and manage available tools*
+
+### Prompt Templates
+![Prompt Template Editor](assets/screenshots/prompts.png)
+*Create and customize prompt templates with variable substitution*
+
+### Developer Tools
+![Direct Tool Calling](assets/screenshots/developer-tools.png)
+*Test and debug MCP tool calls directly*
+
+### Conversation History
+![Conversation History](assets/screenshots/conversation-history.png)
+*Auto-saved conversations with intelligent naming*
+
+
 ## Features
 
 ### 🤖 AI Chat with Tool Calling

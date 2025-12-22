@@ -84,3 +84,6 @@ dist/
 # UserData/
 # conversations.json
 # settings.json
+
+# Internal documentation / planning (not for public release)
+docs/archive/

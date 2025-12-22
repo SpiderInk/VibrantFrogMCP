@@ -22,7 +22,7 @@ class MCPClientHTTP: ObservableObject {
     private let baseServerURL: URL  // Base URL for server check (without endpoint path)
     private let mcpEndpoint: URL    // Complete MCP endpoint URL (as provided by user)
     private let pythonPath: String
-    private let serverScriptPath: String
+    private let serverScriptPath: String?  // Optional: path to MCP server script (if running locally)
     private var sessionId: String?
 
     convenience init() {
@@ -33,7 +33,7 @@ class MCPClientHTTP: ObservableObject {
     init(
         serverURL: URL,
         pythonPath: String = "/usr/bin/python3",
-        serverScriptPath: String = "/Users/tpiazza/git/VibrantFrogMCP/vibrant_frog_mcp.py"
+        serverScriptPath: String? = nil
     ) {
         // Use the complete URL as provided by the user - DO NOT append /mcp
         self.mcpEndpoint = serverURL
@@ -69,7 +69,7 @@ class MCPClientHTTP: ObservableObject {
         if !serverAlreadyRunning {
             print("🔌 MCPClientHTTP: Starting Python MCP server...")
             print("🔌 MCPClientHTTP: Python path: \(pythonPath)")
-            print("🔌 MCPClientHTTP: Script path: \(serverScriptPath)")
+            print("🔌 MCPClientHTTP: Script path: \(serverScriptPath ?? "not configured")")
 
             // Start Python MCP server in HTTP mode
             try startHTTPServer()
@@ -123,9 +123,16 @@ class MCPClientHTTP: ObservableObject {
             throw MCPClientError.alreadyConnected
         }
 
+        guard let scriptPath = serverScriptPath else {
+            // No script path configured - this is OK for remote servers
+            // Just skip starting the local server
+            print("ℹ️  No local MCP server script configured - connecting to remote server")
+            return
+        }
+
         process = Process()
         process?.executableURL = URL(fileURLWithPath: pythonPath)
-        process?.arguments = [serverScriptPath, "--transport", "http"]
+        process?.arguments = [scriptPath, "--transport", "http"]
         process?.standardOutput = Pipe()
         process?.standardError = Pipe()
 

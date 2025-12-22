@@ -186,10 +186,10 @@ class MCPClient: ObservableObject {
     private var pendingRequests: [Int: CheckedContinuation<Data, Error>] = [:]
 
     private let pythonPath: String
-    private let serverScriptPath: String
+    private let serverScriptPath: String?  // Optional: path to MCP server script
 
     init(pythonPath: String = "/usr/bin/python3",
-         serverScriptPath: String = "/Users/tpiazza/git/VibrantFrogMCP/vibrant_frog_mcp.py") {
+         serverScriptPath: String? = nil) {
         self.pythonPath = pythonPath
         self.serverScriptPath = serverScriptPath
     }
@@ -202,12 +202,16 @@ class MCPClient: ObservableObject {
         }
 
         // Start Python MCP server process
+        guard let scriptPath = serverScriptPath else {
+            throw MCPClientError.processStartFailed
+        }
+
         process = Process()
         inputPipe = Pipe()
         outputPipe = Pipe()
 
         process?.executableURL = URL(fileURLWithPath: pythonPath)
-        process?.arguments = [serverScriptPath]
+        process?.arguments = [scriptPath]
         process?.standardInput = inputPipe
         process?.standardOutput = outputPipe
         process?.standardError = Pipe() // Capture stderr separately

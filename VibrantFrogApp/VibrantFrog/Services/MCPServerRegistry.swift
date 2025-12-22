@@ -101,12 +101,6 @@ class MCPServerRegistry: ObservableObject {
         }
     }
 
-    func updateCustomPrompt(serverID: UUID, prompt: String?) {
-        if let index = servers.firstIndex(where: { $0.id == serverID }) {
-            servers[index].customPrompt = prompt
-            saveServers()
-        }
-    }
 
     func updateConnectionStatus(serverID: UUID, status: MCPServer.ConnectionStatus) {
         if let index = servers.firstIndex(where: { $0.id == serverID }) {
@@ -124,9 +118,18 @@ class MCPServerRegistry: ObservableObject {
                 // Create temporary client for this server
                 // Construct full URL with endpoint path
                 var fullURL = server.url
-                if let endpointPath = server.mcpEndpointPath, !endpointPath.isEmpty && endpointPath != "default" {
-                    fullURL = server.url.hasSuffix("/") ? server.url + endpointPath : server.url + "/" + endpointPath
+                if let endpointPath = server.mcpEndpointPath {
+                    // If endpoint path is explicitly set to empty string, use URL as-is
+                    if endpointPath.isEmpty {
+                        fullURL = server.url
+                    } else if endpointPath != "default" {
+                        fullURL = server.url.hasSuffix("/") ? server.url + endpointPath : server.url + "/" + endpointPath
+                    } else {
+                        // "default" means append /mcp
+                        fullURL = server.url.hasSuffix("/mcp") ? server.url : server.url + "/mcp"
+                    }
                 } else {
+                    // No endpoint path specified, default to appending /mcp
                     fullURL = server.url.hasSuffix("/mcp") ? server.url : server.url + "/mcp"
                 }
 
@@ -166,9 +169,18 @@ class MCPServerRegistry: ObservableObject {
         do {
             // Construct full URL with endpoint path
             var fullURL = server.url
-            if let endpointPath = server.mcpEndpointPath, !endpointPath.isEmpty && endpointPath != "default" {
-                fullURL = server.url.hasSuffix("/") ? server.url + endpointPath : server.url + "/" + endpointPath
+            if let endpointPath = server.mcpEndpointPath {
+                // If endpoint path is explicitly set to empty string, use URL as-is
+                if endpointPath.isEmpty {
+                    fullURL = server.url
+                } else if endpointPath != "default" {
+                    fullURL = server.url.hasSuffix("/") ? server.url + endpointPath : server.url + "/" + endpointPath
+                } else {
+                    // "default" means append /mcp
+                    fullURL = server.url.hasSuffix("/mcp") ? server.url : server.url + "/mcp"
+                }
             } else {
+                // No endpoint path specified, default to appending /mcp
                 fullURL = server.url.hasSuffix("/mcp") ? server.url : server.url + "/mcp"
             }
 
@@ -178,6 +190,10 @@ class MCPServerRegistry: ObservableObject {
             try await client.connect()
 
             let toolsList = try await client.getTools()
+
+            // Update connection status to connected on success
+            updateConnectionStatus(serverID: server.id, status: .connected)
+
             return toolsList.map { tool in
                 RegistryMCPTool(
                     serverID: server.id,
@@ -190,16 +206,12 @@ class MCPServerRegistry: ObservableObject {
             }
         } catch {
             print("Failed to get tools from \(server.name): \(error)")
+            // Update connection status to error on failure
+            updateConnectionStatus(serverID: server.id, status: .error)
             return []
         }
     }
 
-    func getAllCustomPrompts() -> String {
-        return servers
-            .filter { $0.isEnabled }
-            .compactMap { $0.customPrompt }
-            .joined(separator: "\n\n")
-    }
 }
 
 // MARK: - Models
@@ -210,7 +222,6 @@ struct MCPServer: Identifiable, Codable, Equatable, Hashable {
     var url: String
     var isBuiltIn: Bool
     var isEnabled: Bool
-    var customPrompt: String?
     var disabledTools: [String]
     var connectionStatus: ConnectionStatus
     var mcpEndpointPath: String? // Optional custom MCP endpoint path (default: /mcp)
@@ -230,13 +241,12 @@ struct MCPServer: Identifiable, Codable, Equatable, Hashable {
         case error
     }
 
-    init(id: UUID, name: String, url: String, isBuiltIn: Bool, isEnabled: Bool, customPrompt: String? = nil, disabledTools: [String] = [], mcpEndpointPath: String? = nil) {
+    init(id: UUID, name: String, url: String, isBuiltIn: Bool, isEnabled: Bool, disabledTools: [String] = [], mcpEndpointPath: String? = nil) {
         self.id = id
         self.name = name
         self.url = url
         self.isBuiltIn = isBuiltIn
         self.isEnabled = isEnabled
-        self.customPrompt = customPrompt
         self.disabledTools = disabledTools
         self.connectionStatus = .unknown
         self.mcpEndpointPath = mcpEndpointPath
