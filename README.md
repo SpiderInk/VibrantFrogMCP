@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/icon/VibrantFrog_icon_1024px.png" alt="VibrantFrog Icon" width="200"/>
+</p>
+
 # 🐸 VibrantFrog
 
 **A powerful macOS AI chat application with Model Context Protocol (MCP) integration**
