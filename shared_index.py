@@ -19,11 +19,14 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# iCloud Drive path (same as iOS app container)
-ICLOUD_CONTAINER = Path.home() / "Library/Mobile Documents/iCloud~com~vibrantfrog~AuthorAICollab"
-ICLOUD_PATH = ICLOUD_CONTAINER / "PhotoSearch"
-DB_PATH = ICLOUD_PATH / "photo_index.db"
-INDEXED_CACHE_PATH = ICLOUD_PATH / "indexed_photos.json"
+# Shared photo index path
+# Use ~/VibrantFrogPhotoIndex by default (always works, no permissions issues)
+SHARED_INDEX_PATH = Path.home() / "VibrantFrogPhotoIndex"
+DB_PATH = SHARED_INDEX_PATH / "photo_index.db"
+INDEXED_CACHE_PATH = SHARED_INDEX_PATH / "indexed_photos.json"
+
+# Note: VibrantFrog Collab (iOS/Mac app) should also check this location
+# For iCloud sync, both apps can be updated to use a symlink or shared path
 
 
 class SharedPhotoIndex:
