@@ -20,21 +20,9 @@ import shutil
 OLD_DB_PATH = os.path.expanduser("~/Library/Application Support/VibrantFrogMCP/photo_index")
 OLD_CACHE_PATH = Path(OLD_DB_PATH).parent / "indexed_photos.json"
 
-# Try iCloud first, fall back to local if not available
+# iCloud Drive path - will be created if it doesn't exist
 ICLOUD_CONTAINER = Path.home() / "Library/Mobile Documents/iCloud~com~vibrantfrog~AuthorAICollab"
 ICLOUD_PATH = ICLOUD_CONTAINER / "PhotoSearch"
-
-# Fallback to local directory if iCloud container doesn't exist
-if not ICLOUD_CONTAINER.exists():
-    print("⚠️  iCloud container not found, using local directory for testing")
-    print(f"   Expected: {ICLOUD_CONTAINER}")
-    ICLOUD_PATH = Path.home() / "VibrantFrogPhotoIndex"
-    print(f"   Using: {ICLOUD_PATH}")
-    print("\nTo use iCloud sync:")
-    print("1. Run VibrantFrog Collab app once to create iCloud container")
-    print("2. Run this script again")
-    print()
-
 NEW_DB_PATH = ICLOUD_PATH / "photo_index.db"
 NEW_CACHE_PATH = ICLOUD_PATH / "indexed_photos.json"
 
@@ -124,8 +112,50 @@ def migrate_chromadb_to_sqlite():
         return False
 
     # Step 2: Create iCloud directory
-    ICLOUD_PATH.mkdir(parents=True, exist_ok=True)
-    print(f"✅ Created iCloud directory: {ICLOUD_PATH}")
+    try:
+        # Create the iCloud container directory
+        ICLOUD_CONTAINER.mkdir(parents=False, exist_ok=True)
+        print(f"✅ Created iCloud container: {ICLOUD_CONTAINER}")
+    except PermissionError:
+        # Container exists but we don't have permission to create it
+        # This is OK - it might already exist
+        if not ICLOUD_CONTAINER.exists():
+            print(f"❌ Cannot create iCloud container: {ICLOUD_CONTAINER}")
+            print("   This may be because the container hasn't been initialized by macOS yet.")
+            print("\nTrying to create it manually...")
+            # Try with sudo or different approach
+            import subprocess
+            try:
+                # Touch a file to trigger iCloud container creation
+                test_file = ICLOUD_CONTAINER / ".init"
+                test_file.parent.mkdir(parents=True, exist_ok=True)
+                test_file.touch()
+                print(f"✅ iCloud container initialized")
+            except Exception as e:
+                print(f"❌ Still failed: {e}")
+                return False
+    except FileNotFoundError:
+        # Parent directory doesn't exist - create the whole path
+        try:
+            ICLOUD_CONTAINER.mkdir(parents=True, exist_ok=True)
+            print(f"✅ Created iCloud container: {ICLOUD_CONTAINER}")
+        except PermissionError as e:
+            print(f"❌ Permission denied creating iCloud container")
+            print(f"   Error: {e}")
+            print("\nThe iCloud container folder needs to be created.")
+            print("This is a macOS security feature.")
+            print("\nPlease run this in Terminal:")
+            print(f'  mkdir -p "{ICLOUD_CONTAINER}"')
+            print("\nThen run this script again.")
+            return False
+
+    # Now create the PhotoSearch subfolder
+    try:
+        ICLOUD_PATH.mkdir(parents=True, exist_ok=True)
+        print(f"✅ Created PhotoSearch directory: {ICLOUD_PATH}")
+    except Exception as e:
+        print(f"❌ Failed to create PhotoSearch directory: {e}")
+        return False
 
     # Step 3: Connect to existing ChromaDB
     print(f"\n📂 Loading existing ChromaDB from: {OLD_DB_PATH}")
