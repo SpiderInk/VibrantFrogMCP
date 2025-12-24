@@ -20,7 +20,21 @@ import shutil
 OLD_DB_PATH = os.path.expanduser("~/Library/Application Support/VibrantFrogMCP/photo_index")
 OLD_CACHE_PATH = Path(OLD_DB_PATH).parent / "indexed_photos.json"
 
-ICLOUD_PATH = Path.home() / "Library/Mobile Documents/iCloud~com~vibrantfrog~AuthorAICollab/PhotoSearch"
+# Try iCloud first, fall back to local if not available
+ICLOUD_CONTAINER = Path.home() / "Library/Mobile Documents/iCloud~com~vibrantfrog~AuthorAICollab"
+ICLOUD_PATH = ICLOUD_CONTAINER / "PhotoSearch"
+
+# Fallback to local directory if iCloud container doesn't exist
+if not ICLOUD_CONTAINER.exists():
+    print("⚠️  iCloud container not found, using local directory for testing")
+    print(f"   Expected: {ICLOUD_CONTAINER}")
+    ICLOUD_PATH = Path.home() / "VibrantFrogPhotoIndex"
+    print(f"   Using: {ICLOUD_PATH}")
+    print("\nTo use iCloud sync:")
+    print("1. Run VibrantFrog Collab app once to create iCloud container")
+    print("2. Run this script again")
+    print()
+
 NEW_DB_PATH = ICLOUD_PATH / "photo_index.db"
 NEW_CACHE_PATH = ICLOUD_PATH / "indexed_photos.json"
 

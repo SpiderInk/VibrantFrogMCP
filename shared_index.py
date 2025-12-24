@@ -20,7 +20,13 @@ import logging
 logger = logging.getLogger(__name__)
 
 # iCloud Drive path (same as iOS app container)
-ICLOUD_PATH = Path.home() / "Library/Mobile Documents/iCloud~com~vibrantfrog~AuthorAICollab/PhotoSearch"
+ICLOUD_CONTAINER = Path.home() / "Library/Mobile Documents/iCloud~com~vibrantfrog~AuthorAICollab"
+ICLOUD_PATH = ICLOUD_CONTAINER / "PhotoSearch"
+
+# Fallback to local directory if iCloud container doesn't exist
+if not ICLOUD_CONTAINER.exists():
+    ICLOUD_PATH = Path.home() / "VibrantFrogPhotoIndex"
+
 DB_PATH = ICLOUD_PATH / "photo_index.db"
 INDEXED_CACHE_PATH = ICLOUD_PATH / "indexed_photos.json"
 
