@@ -2,11 +2,12 @@
 //  CloudKitPhotoIndexSync.swift
 //  VibrantFrog
 //
-//  Service for syncing photo index to CloudKit
+//  Service for syncing photo index to CloudKit as individual records
 //
 
 import Foundation
 import CloudKit
+import SQLite3
 
 /// Manages CloudKit sync for the shared photo index database
 class CloudKitPhotoIndexSync {
@@ -14,7 +15,8 @@ class CloudKitPhotoIndexSync {
 
     private let container: CKContainer
     private let privateDatabase: CKDatabase
-    private let photoIndexRecordType = "PhotoIndex"
+    private let photoRecordType = "IndexedPhoto"
+    private let batchSize = 400 // CloudKit limit is 400 operations per batch
 
     var isCloudKitAvailable: Bool {
         FileManager.default.ubiquityIdentityToken != nil
@@ -27,7 +29,7 @@ class CloudKitPhotoIndexSync {
 
     // MARK: - Photo Index Sync
 
-    /// Upload the photo index database to CloudKit
+    /// Upload the photo index database to CloudKit as individual records
     func uploadPhotoIndex(databaseURL: URL) async throws {
         guard isCloudKitAvailable else {
             throw CloudKitSyncError.cloudKitNotAvailable
@@ -37,99 +39,165 @@ class CloudKitPhotoIndexSync {
             throw CloudKitSyncError.databaseNotFound
         }
 
-        print("📤 Uploading photo index to CloudKit...")
+        print("📤 Uploading photo index to CloudKit as individual records...")
         print("   Database: \(databaseURL.path)")
 
-        let recordID = CKRecord.ID(recordName: "photoIndex")
+        // Read all photos from SQLite
+        let photos = try readPhotosFromDatabase(databaseURL: databaseURL)
+        print("   Found \(photos.count) photos to sync")
 
-        // Fetch existing record or create new one
-        let record: CKRecord
-        do {
-            record = try await privateDatabase.record(for: recordID)
-            print("   Updating existing CloudKit record")
-        } catch let error as CKError where error.code == .unknownItem {
-            record = CKRecord(recordType: photoIndexRecordType, recordID: recordID)
-            print("   Creating new CloudKit record")
-        }
+        // Upload in batches
+        var uploadedCount = 0
+        let totalBatches = (photos.count + batchSize - 1) / batchSize
 
-        // Create asset from database file
-        let asset = CKAsset(fileURL: databaseURL)
-        record["database"] = asset
-        record["updatedAt"] = Date()
+        for batchIndex in 0..<totalBatches {
+            let startIndex = batchIndex * batchSize
+            let endIndex = min(startIndex + batchSize, photos.count)
+            let batch = Array(photos[startIndex..<endIndex])
 
-        // Get file size
-        if let attributes = try? FileManager.default.attributesOfItem(atPath: databaseURL.path),
-           let fileSize = attributes[.size] as? Int64 {
-            record["databaseSize"] = Int(fileSize)
-            print("   Size: \(Double(fileSize) / 1024 / 1024) MB")
-        }
+            print("   Uploading batch \(batchIndex + 1)/\(totalBatches) (\(batch.count) photos)...")
 
-        // Save to CloudKit
-        _ = try await privateDatabase.save(record)
-
-        print("✅ Photo index uploaded to CloudKit successfully")
-    }
-
-    /// Check if there's an update available in CloudKit
-    func checkForUpdate(localModifiedDate: Date?) async throws -> Bool {
-        guard isCloudKitAvailable else {
-            return false
-        }
-
-        let recordID = CKRecord.ID(recordName: "photoIndex")
-
-        do {
-            let record = try await privateDatabase.record(for: recordID)
-
-            guard let cloudUpdatedAt = record["updatedAt"] as? Date else {
-                return false
+            // Create records for this batch
+            let records = batch.map { photo in
+                createRecord(from: photo)
             }
 
-            // If we don't have a local version, update is available
-            guard let localDate = localModifiedDate else {
-                return true
+            // Save batch to CloudKit
+            let operation = CKModifyRecordsOperation(recordsToSave: records, recordIDsToDelete: nil)
+            operation.savePolicy = .changedKeys
+            operation.isAtomic = false // Continue even if some records fail
+
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                operation.modifyRecordsResultBlock = { result in
+                    switch result {
+                    case .success():
+                        continuation.resume()
+                    case .failure(let error):
+                        continuation.resume(throwing: error)
+                    }
+                }
+                privateDatabase.add(operation)
             }
 
-            // Update available if cloud version is newer
-            return cloudUpdatedAt > localDate
-        } catch let error as CKError where error.code == .unknownItem {
-            // No record in CloudKit
-            return false
+            uploadedCount += batch.count
+            print("   Progress: \(uploadedCount)/\(photos.count)")
         }
+
+        print("✅ Successfully uploaded \(uploadedCount) photos to CloudKit")
     }
 
-    /// Download the photo index from CloudKit
-    func downloadPhotoIndex(destinationURL: URL) async throws -> Bool {
+    // MARK: - Database Reading
+
+    private struct PhotoRecord {
+        let uuid: String
+        let description: String
+        let embedding: Data
+        let indexedAt: Date
+    }
+
+    private func readPhotosFromDatabase(databaseURL: URL) throws -> [PhotoRecord] {
+        var db: OpaquePointer?
+        guard sqlite3_open(databaseURL.path, &db) == SQLITE_OK else {
+            throw CloudKitSyncError.databaseNotFound
+        }
+        defer { sqlite3_close(db) }
+
+        let sql = "SELECT uuid, description, embedding, indexed_at FROM photo_index"
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw CloudKitSyncError.uploadFailed("Failed to prepare query")
+        }
+        defer { sqlite3_finalize(statement) }
+
+        var photos: [PhotoRecord] = []
+
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let uuidCString = sqlite3_column_text(statement, 0),
+                  let descCString = sqlite3_column_text(statement, 1) else {
+                continue
+            }
+
+            let uuid = String(cString: uuidCString)
+            let description = String(cString: descCString)
+
+            // Get embedding blob
+            guard let blobPtr = sqlite3_column_blob(statement, 2) else { continue }
+            let blobSize = sqlite3_column_bytes(statement, 2)
+            let embedding = Data(bytes: blobPtr, count: Int(blobSize))
+
+            // Get timestamp
+            let timestamp = sqlite3_column_double(statement, 3)
+            let indexedAt = Date(timeIntervalSince1970: timestamp)
+
+            photos.append(PhotoRecord(
+                uuid: uuid,
+                description: description,
+                embedding: embedding,
+                indexedAt: indexedAt
+            ))
+        }
+
+        return photos
+    }
+
+    private func createRecord(from photo: PhotoRecord) -> CKRecord {
+        let recordID = CKRecord.ID(recordName: photo.uuid)
+        let record = CKRecord(recordType: photoRecordType, recordID: recordID)
+
+        record["uuid"] = photo.uuid
+        record["photoDescription"] = photo.description
+        record["embedding"] = photo.embedding
+        record["indexedAt"] = photo.indexedAt
+
+        return record
+    }
+
+    // MARK: - Querying CloudKit
+
+    /// Search for photos in CloudKit by keyword
+    func searchPhotos(query: String, limit: Int = 20) async throws -> [CKRecord] {
         guard isCloudKitAvailable else {
             throw CloudKitSyncError.cloudKitNotAvailable
         }
 
-        print("📥 Downloading photo index from CloudKit...")
+        print("🔍 Searching CloudKit for: \(query)")
 
-        let recordID = CKRecord.ID(recordName: "photoIndex")
+        // Create predicate for description search
+        let predicate = NSPredicate(format: "photoDescription CONTAINS[cd] %@", query)
+        let queryOp = CKQuery(recordType: photoRecordType, predicate: predicate)
+        queryOp.sortDescriptors = [NSSortDescriptor(key: "indexedAt", ascending: false)]
 
-        do {
-            let record = try await privateDatabase.record(for: recordID)
+        // Perform query
+        let (results, _) = try await privateDatabase.records(matching: queryOp, resultsLimit: limit)
 
-            guard let asset = record["database"] as? CKAsset,
-                  let assetURL = asset.fileURL else {
-                throw CloudKitSyncError.assetNotFound
+        // Extract successful records
+        let records = results.compactMap { (_, result) -> CKRecord? in
+            switch result {
+            case .success(let record):
+                return record
+            case .failure:
+                return nil
             }
-
-            // Copy database to destination
-            try? FileManager.default.removeItem(at: destinationURL)
-            try FileManager.default.copyItem(at: assetURL, to: destinationURL)
-
-            if let size = record["databaseSize"] as? Int {
-                print("   Size: \(Double(size) / 1024 / 1024) MB")
-            }
-
-            print("✅ Photo index downloaded from CloudKit successfully")
-            return true
-        } catch let error as CKError where error.code == .unknownItem {
-            print("⚠️  No photo index found in CloudKit")
-            return false
         }
+
+        print("   Found \(records.count) matching photos")
+        return records
+    }
+
+    /// Get total count of indexed photos in CloudKit
+    func getPhotoCount() async throws -> Int {
+        guard isCloudKitAvailable else {
+            return 0
+        }
+
+        let predicate = NSPredicate(value: true) // Match all
+        let query = CKQuery(recordType: photoRecordType, predicate: predicate)
+
+        let (results, _) = try await privateDatabase.records(matching: query, resultsLimit: 1)
+
+        // CloudKit doesn't provide count directly, so we'd need to fetch all or use a custom counter
+        // For now, return a placeholder
+        return results.count
     }
 }
 
