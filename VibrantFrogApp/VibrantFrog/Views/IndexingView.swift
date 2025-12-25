@@ -38,6 +38,11 @@ struct PhotoIndexingView: View {
     @State private var indexedPhotosCount: Int = 0
     @State private var hasLoggedCacheMissing: Bool = false
 
+    // CloudKit sync
+    @State private var isSyncingToCloud: Bool = false
+    @State private var lastSyncDate: Date?
+    private let cloudKitSync = CloudKitPhotoIndexSync.shared
+
     var body: some View {
         ScrollView {
             VStack(spacing: 24) {
@@ -56,6 +61,9 @@ struct PhotoIndexingView: View {
 
                 // Statistics
                 statisticsCard
+
+                // CloudKit sync card
+                cloudKitSyncCard
 
                 // Actions
                 actionsCard
@@ -247,6 +255,58 @@ struct PhotoIndexingView: View {
         }
     }
 
+    private var cloudKitSyncCard: some View {
+        GroupBox("CloudKit Sync") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Image(systemName: cloudKitSync.isCloudKitAvailable ? "icloud.fill" : "icloud.slash")
+                        .foregroundStyle(cloudKitSync.isCloudKitAvailable ? .blue : .gray)
+                    Text("iCloud Status")
+                    Spacer()
+                    Text(cloudKitSync.isCloudKitAvailable ? "Available" : "Not Available")
+                        .foregroundStyle(.secondary)
+                }
+
+                if let lastSync = lastSyncDate {
+                    Divider()
+
+                    HStack {
+                        Label("Last Sync", systemImage: "clock")
+                        Spacer()
+                        Text(lastSync, style: .relative)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if isSyncingToCloud {
+                    Divider()
+
+                    HStack {
+                        ProgressView()
+                            .scaleEffect(0.7)
+                        Text("Uploading to iCloud...")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Divider()
+
+                Button {
+                    Task {
+                        await uploadToCloudKit()
+                    }
+                } label: {
+                    Label("Upload to iCloud", systemImage: "icloud.and.arrow.up")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .disabled(isSyncingToCloud || !cloudKitSync.isCloudKitAvailable)
+            }
+            .padding(.vertical, 8)
+        }
+    }
+
     private var actionsCard: some View {
         GroupBox("Actions") {
             VStack(spacing: 12) {
@@ -428,6 +488,11 @@ struct PhotoIndexingView: View {
 
                         if statusInfo.status == "failed" {
                             errorMessage = "Indexing job failed"
+                        } else if statusInfo.status == "completed" {
+                            // Auto-upload to CloudKit after successful indexing
+                            Task {
+                                await uploadToCloudKit()
+                            }
                         }
                     }
                 }
@@ -570,6 +635,47 @@ struct PhotoIndexingView: View {
             }
             DispatchQueue.main.async {
                 self.indexedPhotosCount = 0
+            }
+        }
+    }
+
+    // MARK: - CloudKit Sync
+
+    private func uploadToCloudKit() async {
+        guard cloudKitSync.isCloudKitAvailable else {
+            await MainActor.run {
+                errorMessage = "iCloud not available. Please sign in to iCloud."
+            }
+            return
+        }
+
+        // Path to shared photo index
+        let homeDir = FileManager.default.homeDirectoryForCurrentUser
+        let databasePath = homeDir.appendingPathComponent("VibrantFrogPhotoIndex/photo_index.db")
+
+        guard FileManager.default.fileExists(atPath: databasePath.path) else {
+            await MainActor.run {
+                errorMessage = "Photo index database not found at ~/VibrantFrogPhotoIndex/"
+            }
+            return
+        }
+
+        await MainActor.run {
+            isSyncingToCloud = true
+            errorMessage = nil
+        }
+
+        do {
+            try await cloudKitSync.uploadPhotoIndex(databaseURL: databasePath)
+
+            await MainActor.run {
+                isSyncingToCloud = false
+                lastSyncDate = Date()
+            }
+        } catch {
+            await MainActor.run {
+                isSyncingToCloud = false
+                errorMessage = "CloudKit upload failed: \(error.localizedDescription)"
             }
         }
     }

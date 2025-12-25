@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		45FEF6A71E2844218650F122 /* CloudKitPhotoIndexSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = F71F78D7BADF463B9C8A929A /* CloudKitPhotoIndexSync.swift */; };
 		1A0000010000000000000001 /* VibrantFrogApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000020000000000000001 /* VibrantFrogApp.swift */; };
 		1A0000010000000000000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000020000000000000002 /* ContentView.swift */; };
 		1A0000010000000000000003 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 1A0000020000000000000003 /* Assets.xcassets */; };
@@ -54,6 +55,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		F71F78D7BADF463B9C8A929A /* CloudKitPhotoIndexSync.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = CloudKitPhotoIndexSync.swift; sourceTree = "<group>"; };
 		1A0000020000000000000000 /* VibrantFrog.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = VibrantFrog.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1A0000020000000000000001 /* VibrantFrogApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VibrantFrogApp.swift; sourceTree = "<group>"; };
 		1A0000020000000000000002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
@@ -120,6 +122,7 @@
 				1A0000020000000000000003 /* Assets.xcassets */,
 				1A0000020000000000000014 /* VibrantFrog.entitlements */,
 				1A0000020000000000000015 /* Info.plist */,
+		
 			);
 			path = VibrantFrog;
 			sourceTree = "<group>";
@@ -164,6 +167,7 @@
 				1A0000020000000000000016 /* LibLlama.swift */,
 				1A0000020000000000000017 /* MCPClient.swift */,
 				1A0000020000000000000019 /* MCPClientHTTP.swift */,
+				F71F78D7BADF463B9C8A929A /* CloudKitPhotoIndexSync.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -283,7 +287,8 @@
 				718B3D402EE12DB800022C75 /* PromptTemplateStore.swift in Sources */,
 				1A0000010000000000000018 /* MCPTestView.swift in Sources */,
 				1A0000010000000000000019 /* MCPClientHTTP.swift in Sources */,
-			);
+			
+				45FEF6A71E2844218650F122 /* CloudKitPhotoIndexSync.swift in Sources */,);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
