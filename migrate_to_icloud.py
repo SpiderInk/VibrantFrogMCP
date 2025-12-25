@@ -174,8 +174,12 @@ def migrate_chromadb_to_sqlite():
             embedding = results['embeddings'][i]
 
             # Serialize embedding as JSON (for Swift compatibility)
-            # Alternative: use pickle, but JSON is more portable
-            embedding_json = json.dumps(embedding).encode('utf-8')
+            # Convert numpy array to list first
+            if hasattr(embedding, 'tolist'):
+                embedding_list = embedding.tolist()
+            else:
+                embedding_list = list(embedding)
+            embedding_json = json.dumps(embedding_list).encode('utf-8')
 
             # Extract metadata fields (with defaults for missing fields)
             cursor.execute("""
