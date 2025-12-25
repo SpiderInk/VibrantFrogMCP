@@ -352,6 +352,17 @@ Notes:
     # Run migration
     try:
         success = migrate_chromadb_to_sqlite()
+
+        # Trigger CloudKit sync after successful migration
+        if success:
+            try:
+                from trigger_cloudkit_sync import trigger_sync
+                print("\n📤 Triggering CloudKit sync...")
+                trigger_sync()
+            except Exception as e:
+                print(f"⚠️  Could not trigger CloudKit sync: {e}")
+                print("   (This is optional - you can manually upload from the Mac app)")
+
         sys.exit(0 if success else 1)
     except KeyboardInterrupt:
         print("\n\n❌ Migration cancelled by user")

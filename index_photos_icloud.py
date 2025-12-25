@@ -361,3 +361,12 @@ Performance:
         include_cloud=include_cloud,
         reverse_chronological=reverse_chronological
     ))
+
+    # Trigger CloudKit sync after successful indexing
+    try:
+        from trigger_cloudkit_sync import trigger_sync
+        print("\n📤 Triggering CloudKit sync...")
+        trigger_sync()
+    except Exception as e:
+        print(f"⚠️  Could not trigger CloudKit sync: {e}")
+        print("   (This is optional - you can manually upload from the Mac app)")
