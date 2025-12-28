@@ -435,10 +435,11 @@ struct ChatView: View {
                     relevance = rel
 
                     // All fields collected, create PhotoResult
-                    if !uuid.isEmpty && !filename.isEmpty {
+                    // Allow missing filename - use UUID as fallback
+                    if !uuid.isEmpty {
                         photos.append(ChatMessage.ToolResult.PhotoResult(
                             uuid: uuid,
-                            filename: filename,
+                            filename: filename.isEmpty ? "Photo \(uuid.prefix(8))" : filename,
                             description: description,
                             relevance: relevance
                         ))
