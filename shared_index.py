@@ -57,11 +57,11 @@ class SharedPhotoIndex:
     def _ensure_icloud_directory(self):
         """Ensure iCloud Drive directory exists and is accessible"""
         try:
-            ICLOUD_PATH.mkdir(parents=True, exist_ok=True)
-            logger.info(f"✅ iCloud directory ready: {ICLOUD_PATH}")
+            SHARED_INDEX_PATH.mkdir(parents=True, exist_ok=True)
+            logger.info(f"✅ Shared index directory ready: {SHARED_INDEX_PATH}")
         except Exception as e:
-            logger.error(f"❌ Failed to create iCloud directory: {e}")
-            logger.error("Make sure iCloud Drive is enabled in System Settings")
+            logger.error(f"❌ Failed to create shared index directory: {e}")
+            logger.error("Path: {SHARED_INDEX_PATH}")
             raise
 
     def _wait_for_icloud(self, max_wait: float = 10.0) -> bool:
@@ -75,7 +75,7 @@ class SharedPhotoIndex:
             True if iCloud is available, False otherwise
         """
         start = time.time()
-        icloud_root = ICLOUD_PATH.parent.parent
+        icloud_root = SHARED_INDEX_PATH.parent
 
         while time.time() - start < max_wait:
             if icloud_root.exists():

@@ -87,3 +87,4 @@ dist/
 
 # Internal documentation / planning (not for public release)
 docs/archive/
+*.xcuserstate

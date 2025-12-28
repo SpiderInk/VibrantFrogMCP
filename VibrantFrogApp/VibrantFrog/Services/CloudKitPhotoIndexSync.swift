@@ -92,6 +92,58 @@ class CloudKitPhotoIndexSync {
         print("✅ Successfully uploaded \(uploadedCount) photos to CloudKit")
     }
 
+    /// Upload the database file as a CKAsset for direct download on iOS
+    func uploadDatabaseFile(databaseURL: URL) async throws {
+        guard isCloudKitAvailable else {
+            throw CloudKitSyncError.cloudKitNotAvailable
+        }
+
+        guard FileManager.default.fileExists(atPath: databaseURL.path) else {
+            throw CloudKitSyncError.databaseNotFound
+        }
+
+        print("📤 Uploading database file to CloudKit as CKAsset...")
+        print("   Database: \(databaseURL.path)")
+
+        // Get file size
+        let attributes = try FileManager.default.attributesOfItem(atPath: databaseURL.path)
+        let fileSize = attributes[.size] as? Int64 ?? 0
+        print("   File size: \(formatBytes(Int(fileSize)))")
+
+        // Create CKAsset from database file
+        let asset = CKAsset(fileURL: databaseURL)
+
+        // Create or update the photoIndex record
+        let recordID = CKRecord.ID(recordName: "photoIndex")
+
+        do {
+            // Try to fetch existing record first
+            let existingRecord = try await privateDatabase.record(for: recordID)
+            existingRecord["database"] = asset
+            existingRecord["lastUpdated"] = Date()
+            existingRecord["fileSize"] = fileSize
+
+            let savedRecord = try await privateDatabase.save(existingRecord)
+            print("✅ Updated existing database record in CloudKit")
+            print("   Record ID: \(savedRecord.recordID.recordName)")
+
+        } catch let error as CKError where error.code == .unknownItem {
+            // Record doesn't exist, create new one
+            let record = CKRecord(recordType: "PhotoIndexDatabase", recordID: recordID)
+            record["database"] = asset
+            record["lastUpdated"] = Date()
+            record["fileSize"] = fileSize
+
+            let savedRecord = try await privateDatabase.save(record)
+            print("✅ Created new database record in CloudKit")
+            print("   Record ID: \(savedRecord.recordID.recordName)")
+
+        } catch {
+            print("❌ Failed to upload database: \(error.localizedDescription)")
+            throw error
+        }
+    }
+
     // MARK: - Database Reading
 
     private struct PhotoRecord {
@@ -341,6 +393,62 @@ class CloudKitPhotoIndexSync {
         // For now, return a placeholder
         return results.count
     }
+
+    // MARK: - Auto-Upload from Flag File
+
+    /// Check for .needs-cloudkit-sync flag and upload if present
+    func checkForAutoUpload() async {
+        let indexPath = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("VibrantFrogPhotoIndex")
+        let flagPath = indexPath.appendingPathComponent(".needs-cloudkit-sync")
+        let dbPath = indexPath.appendingPathComponent("photo_index.db")
+
+        guard FileManager.default.fileExists(atPath: flagPath.path) else {
+            print("📋 No sync flag found, skipping auto-upload")
+            return
+        }
+
+        print("🔔 Sync flag detected! Starting auto-upload...")
+
+        do {
+            // Read flag data
+            let flagData = try Data(contentsOf: flagPath)
+            let flagInfo = try JSONDecoder().decode(CloudKitSyncFlag.self, from: flagData)
+
+            print("   Flag info: \(flagInfo.photo_count) photos, \(formatBytes(flagInfo.database_size))")
+
+            // Check if database exists
+            guard FileManager.default.fileExists(atPath: dbPath.path) else {
+                print("   ⚠️  Database not found at \(dbPath.path)")
+                return
+            }
+
+            // Trigger database file upload (not individual records)
+            try await uploadDatabaseFile(databaseURL: dbPath)
+
+            // Remove flag on success
+            try FileManager.default.removeItem(at: flagPath)
+            print("✅ Auto-upload completed successfully!")
+            print("   Flag file removed: \(flagPath.path)")
+
+        } catch {
+            print("❌ Auto-upload failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func formatBytes(_ bytes: Int) -> String {
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useKB, .useMB, .useGB]
+        formatter.countStyle = .file
+        return formatter.string(fromByteCount: Int64(bytes))
+    }
+}
+
+struct CloudKitSyncFlag: Codable {
+    let database_path: String
+    let database_size: Int
+    let timestamp: String
+    let photo_count: Int
 }
 
 // MARK: - Errors

@@ -12,12 +12,17 @@ import SwiftUI
 struct VibrantFrogApp: App {
     @StateObject private var photoLibraryService = PhotoLibraryService()
     @StateObject private var llmService = LLMService()
+    private let cloudKitSync = CloudKitPhotoIndexSync.shared
 
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environmentObject(photoLibraryService)
                 .environmentObject(llmService)
+                .task {
+                    // Check for auto-upload flag on launch
+                    await cloudKitSync.checkForAutoUpload()
+                }
         }
         .commands {
             CommandGroup(replacing: .appInfo) {
