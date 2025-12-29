@@ -10,6 +10,8 @@ import asyncio
 import sys
 import time
 import logging
+import json
+import subprocess
 from pathlib import Path
 import osxphotos
 
@@ -40,7 +42,39 @@ embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
 )
 
 
-async def index_photo_to_icloud(photo, shared_index: SharedPhotoIndex):
+def get_cloud_identifiers_batch(uuids: list) -> dict:
+    """
+    Get PHCloudIdentifiers for a batch of photo UUIDs using Swift helper.
+
+    Args:
+        uuids: List of photo UUIDs
+
+    Returns:
+        Dictionary mapping UUID -> cloud_identifier_string
+    """
+    if not uuids:
+        return {}
+
+    try:
+        script_path = Path(__file__).parent / "get_cloud_identifiers.swift"
+        result = subprocess.run(
+            ["swift", str(script_path)] + uuids,
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+
+        if result.returncode == 0:
+            return json.loads(result.stdout)
+        else:
+            logger.warning(f"Cloud identifier fetch failed: {result.stderr}")
+            return {}
+    except Exception as e:
+        logger.warning(f"Failed to get cloud identifiers: {e}")
+        return {}
+
+
+async def index_photo_to_icloud(photo, shared_index: SharedPhotoIndex, cloud_guid: str = None):
     """
     Index a single photo to iCloud shared database.
 
@@ -102,9 +136,9 @@ async def index_photo_to_icloud(photo, shared_index: SharedPhotoIndex):
         embedding_elapsed = time.time() - embedding_start
         logger.info(f"  ├─ Embedding generation: {embedding_elapsed:.2f}s")
 
-        # Step 4: Store in iCloud database
+        # Step 4: Store in iCloud database (with cloud_guid if provided)
         db_start = time.time()
-        success = shared_index.index_photo(photo, description, embedding.tolist())
+        success = shared_index.index_photo(photo, description, embedding.tolist(), cloud_guid=cloud_guid)
         db_elapsed = time.time() - db_start
         logger.info(f"  ├─ iCloud database write: {db_elapsed:.2f}s")
 

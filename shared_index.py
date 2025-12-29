@@ -116,6 +116,7 @@ class SharedPhotoIndex:
                 orientation TEXT,
                 cloud_asset INTEGER DEFAULT 0,
                 has_adjustments INTEGER DEFAULT 0,
+                cloud_guid TEXT,
 
                 -- Indexing metadata
                 indexed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -170,7 +171,7 @@ class SharedPhotoIndex:
 
         logger.info(f"✅ Database initialized: {self.db_path}")
 
-    def index_photo(self, photo, description: str, embedding: List[float]) -> bool:
+    def index_photo(self, photo, description: str, embedding: List[float], cloud_guid: str = None) -> bool:
         """
         Index a single photo to the shared iCloud database.
 
@@ -178,6 +179,7 @@ class SharedPhotoIndex:
             photo: osxphotos.PhotoInfo object
             description: Text description of the photo
             embedding: 384-dimensional embedding vector
+            cloud_guid: Optional PHCloudIdentifier string for cross-device photo access
 
         Returns:
             True if successful, False otherwise
@@ -207,9 +209,9 @@ class SharedPhotoIndex:
                     uuid, description, embedding,
                     filename, date_taken, location, albums, keywords,
                     favorite, width, height, orientation,
-                    cloud_asset, has_adjustments,
+                    cloud_asset, has_adjustments, cloud_guid,
                     indexed_by, description_source
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 photo.uuid,
                 description,
@@ -225,6 +227,7 @@ class SharedPhotoIndex:
                 orientation,
                 1 if photo.iscloudasset else 0,
                 1 if photo.hasadjustments else 0,
+                cloud_guid,  # PHCloudIdentifier for cross-device access
                 'vibrantfrogmcp',
                 'llava'
             ))

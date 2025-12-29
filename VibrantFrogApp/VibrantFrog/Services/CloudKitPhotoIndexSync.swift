@@ -30,7 +30,31 @@ class CloudKitPhotoIndexSync {
 
     // MARK: - Photo Index Sync
 
-    /// Upload the photo index database to CloudKit as individual records
+    /// Enrich database with cloud identifiers (does NOT upload to CloudKit)
+    func enrichDatabaseWithCloudGuids(databaseURL: URL) async throws {
+        guard FileManager.default.fileExists(atPath: databaseURL.path) else {
+            throw CloudKitSyncError.databaseNotFound
+        }
+
+        print("🔧 Enriching database with cloud identifiers...")
+        print("   Database: \(databaseURL.path)")
+
+        // Read all photos from SQLite
+        var photos = try readPhotosFromDatabase(databaseURL: databaseURL)
+        print("   Found \(photos.count) photos")
+
+        // Update photos with PHCloudIdentifier (for cross-device access)
+        print("   Getting PHCloudIdentifiers for cross-device photo access...")
+        photos = try await enrichWithCloudIdentifiers(photos: photos)
+        print("   ✅ Enriched \(photos.count) photos with cloud identifiers")
+
+        // Write cloud_guids back to local database
+        print("   Writing cloud identifiers back to local database...")
+        try updateDatabaseWithCloudGuids(databaseURL: databaseURL, photos: photos)
+        print("   ✅ Updated local database with cloud identifiers")
+    }
+
+    /// Upload the photo index database to CloudKit as a single database file
     func uploadPhotoIndex(databaseURL: URL) async throws {
         guard isCloudKitAvailable else {
             throw CloudKitSyncError.cloudKitNotAvailable
@@ -40,56 +64,17 @@ class CloudKitPhotoIndexSync {
             throw CloudKitSyncError.databaseNotFound
         }
 
-        print("📤 Uploading photo index to CloudKit as individual records...")
-        print("   Database: \(databaseURL.path)")
+        print("📤 Uploading photo index database to CloudKit...")
 
-        // Read all photos from SQLite
-        var photos = try readPhotosFromDatabase(databaseURL: databaseURL)
-        print("   Found \(photos.count) photos to sync")
+        // First, enrich the database with cloud identifiers if needed
+        print("   Step 1: Enriching database with cloud identifiers...")
+        try await enrichDatabaseWithCloudGuids(databaseURL: databaseURL)
 
-        // Update photos with PHCloudIdentifier (for cross-device access)
-        print("   Getting PHCloudIdentifiers for cross-device photo access...")
-        photos = try await enrichWithCloudIdentifiers(photos: photos)
-        print("   ✅ Enriched \(photos.count) photos with cloud identifiers")
+        // Then upload the database file
+        print("   Step 2: Uploading database file to CloudKit...")
+        try await uploadDatabaseFile(databaseURL: databaseURL)
 
-        // Upload in batches
-        var uploadedCount = 0
-        let totalBatches = (photos.count + batchSize - 1) / batchSize
-
-        for batchIndex in 0..<totalBatches {
-            let startIndex = batchIndex * batchSize
-            let endIndex = min(startIndex + batchSize, photos.count)
-            let batch = Array(photos[startIndex..<endIndex])
-
-            print("   Uploading batch \(batchIndex + 1)/\(totalBatches) (\(batch.count) photos)...")
-
-            // Create records for this batch
-            let records = batch.map { photo in
-                createRecord(from: photo)
-            }
-
-            // Save batch to CloudKit
-            let operation = CKModifyRecordsOperation(recordsToSave: records, recordIDsToDelete: nil)
-            operation.savePolicy = .changedKeys
-            operation.isAtomic = false // Continue even if some records fail
-
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                operation.modifyRecordsResultBlock = { result in
-                    switch result {
-                    case .success():
-                        continuation.resume()
-                    case .failure(let error):
-                        continuation.resume(throwing: error)
-                    }
-                }
-                privateDatabase.add(operation)
-            }
-
-            uploadedCount += batch.count
-            print("   Progress: \(uploadedCount)/\(photos.count)")
-        }
-
-        print("✅ Successfully uploaded \(uploadedCount) photos to CloudKit")
+        print("✅ Successfully uploaded photo index to CloudKit")
     }
 
     /// Upload the database file as a CKAsset for direct download on iOS
@@ -257,7 +242,7 @@ class CloudKitPhotoIndexSync {
 
         // Get PHCloudIdentifier mappings for ALL assets
         print("   Fetching cloud identifiers (this may take a while for \(localIdentifiers.count) assets)...")
-        let mappings = try await PHPhotoLibrary.shared().cloudIdentifierMappings(forLocalIdentifiers: localIdentifiers)
+        let mappings = PHPhotoLibrary.shared().cloudIdentifierMappings(forLocalIdentifiers: localIdentifiers)
 
         print("   Received \(mappings.count) cloud identifier mappings")
 
@@ -323,6 +308,47 @@ class CloudKitPhotoIndexSync {
         }
 
         return enrichedPhotos
+    }
+
+    /// Update local SQLite database with cloud_guid values
+    private func updateDatabaseWithCloudGuids(databaseURL: URL, photos: [PhotoRecord]) throws {
+        guard FileManager.default.fileExists(atPath: databaseURL.path) else {
+            throw CloudKitSyncError.databaseNotFound
+        }
+
+        // Open database
+        var db: OpaquePointer?
+        guard sqlite3_open(databaseURL.path, &db) == SQLITE_OK else {
+            throw CloudKitSyncError.uploadFailed("Failed to open database")
+        }
+        defer { sqlite3_close(db) }
+
+        var updatedCount = 0
+        var skippedCount = 0
+
+        for photo in photos {
+            // Only update if we have a cloud_guid
+            guard let cloudGuid = photo.cloudGuid, !cloudGuid.isEmpty else {
+                skippedCount += 1
+                continue
+            }
+
+            // Update the record
+            var statement: OpaquePointer?
+            let updateSQL = "UPDATE photo_index SET cloud_guid = ? WHERE uuid = ?"
+
+            if sqlite3_prepare_v2(db, updateSQL, -1, &statement, nil) == SQLITE_OK {
+                sqlite3_bind_text(statement, 1, (cloudGuid as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(statement, 2, (photo.uuid as NSString).utf8String, -1, nil)
+
+                if sqlite3_step(statement) == SQLITE_DONE {
+                    updatedCount += 1
+                }
+                sqlite3_finalize(statement)
+            }
+        }
+
+        print("      Updated \(updatedCount) records, skipped \(skippedCount) without cloud_guid")
     }
 
     private func createRecord(from photo: PhotoRecord) -> CKRecord {
