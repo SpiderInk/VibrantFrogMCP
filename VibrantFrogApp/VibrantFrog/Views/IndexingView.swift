@@ -297,11 +297,15 @@ struct PhotoIndexingView: View {
                         await uploadToCloudKit()
                     }
                 } label: {
-                    Label("Upload to iCloud", systemImage: "icloud.and.arrow.up")
+                    Label("Enrich & Upload to iCloud", systemImage: "icloud.and.arrow.up")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
                 .disabled(isSyncingToCloud || !cloudKitSync.isCloudKitAvailable)
+
+                Text("Adds cloud IDs and uploads database file")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
             .padding(.vertical, 8)
         }
@@ -310,10 +314,11 @@ struct PhotoIndexingView: View {
     private var actionsCard: some View {
         GroupBox("Actions") {
             VStack(spacing: 12) {
+                // MCP-based indexing (legacy - requires MCP server)
                 Button {
                     startIndexing()
                 } label: {
-                    Label("Start Indexing", systemImage: "play.fill")
+                    Label("Start Indexing (via MCP)", systemImage: "play.fill")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
@@ -328,12 +333,16 @@ struct PhotoIndexingView: View {
                                 .foregroundStyle(.orange)
                         }
                         if !mcpClient.isConnected {
-                            Text("⚠️ MCP server not connected")
+                            Text("⚠️ MCP server not connected - use Terminal script instead")
                                 .font(.caption2)
                                 .foregroundStyle(.orange)
                         }
                     }
                 }
+
+                Text("Recommended: Run indexing script from Terminal")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
 
                 if let error = errorMessage {
                     Text(error)
@@ -351,6 +360,17 @@ struct PhotoIndexingView: View {
                 }
                 .buttonStyle(.bordered)
                 .disabled(isIndexing)
+
+                Divider()
+
+                Button {
+                    openTerminalWithIndexingScript()
+                } label: {
+                    Label("Open Terminal to Index Photos", systemImage: "terminal")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .help("Opens Terminal with the indexing script ready to run")
             }
             .padding(.vertical, 8)
         }
@@ -582,59 +602,107 @@ struct PhotoIndexingView: View {
     private func loadIndexedCount() {
         print("🔍 loadIndexedCount() called")
 
-        // Load from the cache file
-        let cachePath = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/VibrantFrogMCP/indexed_photos.json")
+        // Read directly from the shared photo index database
+        let databasePath = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("VibrantFrogPhotoIndex/photo_index.db")
 
-        // Use path(percentEncoded: false) for macOS 14+ compatibility
         let pathString: String
         if #available(macOS 13, *) {
-            pathString = cachePath.path(percentEncoded: false)
+            pathString = databasePath.path(percentEncoded: false)
         } else {
-            pathString = cachePath.path
+            pathString = databasePath.path
         }
 
-        print("🔍 Cache path: \(pathString)")
+        print("🔍 Database path: \(pathString)")
 
-        let fileExists = FileManager.default.fileExists(atPath: pathString)
-        print("🔍 File exists check: \(fileExists)")
-
-        if fileExists {
-            print("🔍 Attempting to read cache file...")
-            do {
-                let data = try Data(contentsOf: cachePath)
-                print("🔍 Read \(data.count) bytes from cache file")
-
-                if let uuids = try JSONSerialization.jsonObject(with: data) as? [String] {
-                    print("🔍 Successfully parsed JSON array with \(uuids.count) UUIDs")
-
-                    DispatchQueue.main.async {
-                        print("🔍 Updating indexedPhotosCount from \(self.indexedPhotosCount) to \(uuids.count)")
-                        self.indexedPhotosCount = uuids.count
-                        print("📊 Updated indexed count to: \(self.indexedPhotosCount)")
-                    }
-                } else {
-                    print("❌ Failed to parse JSON as array of strings")
-                    DispatchQueue.main.async {
-                        self.indexedPhotosCount = 0
-                    }
-                }
-            } catch {
-                print("❌ Failed to load indexed photos count: \(error)")
-                DispatchQueue.main.async {
-                    self.indexedPhotosCount = 0
-                }
-            }
-        } else {
-            // Only log once when we first notice the file is missing
-            if !hasLoggedCacheMissing {
-                print("📊 Cache file not found at: \(pathString)")
-                DispatchQueue.main.async {
-                    self.hasLoggedCacheMissing = true
-                }
-            }
+        guard FileManager.default.fileExists(atPath: pathString) else {
+            print("📊 Database not found - no photos indexed yet")
             DispatchQueue.main.async {
                 self.indexedPhotosCount = 0
+            }
+            return
+        }
+
+        // Open database and count photos
+        var db: OpaquePointer?
+        guard sqlite3_open(pathString, &db) == SQLITE_OK else {
+            print("❌ Failed to open database")
+            DispatchQueue.main.async {
+                self.indexedPhotosCount = 0
+            }
+            return
+        }
+        defer { sqlite3_close(db) }
+
+        // Query count
+        let sql = "SELECT COUNT(*) FROM photo_index"
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            print("❌ Failed to prepare query")
+            DispatchQueue.main.async {
+                self.indexedPhotosCount = 0
+            }
+            return
+        }
+        defer { sqlite3_finalize(statement) }
+
+        if sqlite3_step(statement) == SQLITE_ROW {
+            let count = Int(sqlite3_column_int(statement, 0))
+            print("📊 Found \(count) photos in database")
+
+            DispatchQueue.main.async {
+                self.indexedPhotosCount = count
+            }
+        } else {
+            print("❌ Failed to read count")
+            DispatchQueue.main.async {
+                self.indexedPhotosCount = 0
+            }
+        }
+    }
+
+    private func openTerminalWithIndexingScript() {
+        // Get the script path - assume it's in ~/git/VibrantFrogMCP/
+        let homeDir = FileManager.default.homeDirectoryForCurrentUser
+        let scriptPath = homeDir.appendingPathComponent("git/VibrantFrogMCP/index_photos_icloud.py")
+
+        // Build the terminal command
+        let command = """
+        cd ~/git/VibrantFrogMCP && \\
+        echo "======================================" && \\
+        echo "Photo Indexing Script" && \\
+        echo "======================================" && \\
+        echo "" && \\
+        echo "Index all new photos:" && \\
+        echo "  python3 index_photos_icloud.py" && \\
+        echo "" && \\
+        echo "Index just the newest 100:" && \\
+        echo "  python3 index_photos_icloud.py 100" && \\
+        echo "" && \\
+        echo "Show current statistics:" && \\
+        echo "  python3 index_photos_icloud.py --stats" && \\
+        echo "" && \\
+        echo "Run reconciliation to see missing photos:" && \\
+        echo "  ./reconcile_simple.sh" && \\
+        echo "" && \\
+        echo "======================================" && \\
+        exec $SHELL
+        """
+
+        // Create AppleScript to open Terminal and run command
+        let appleScript = """
+        tell application "Terminal"
+            activate
+            do script "\(command)"
+        end tell
+        """
+
+        // Execute AppleScript
+        var error: NSDictionary?
+        if let scriptObject = NSAppleScript(source: appleScript) {
+            scriptObject.executeAndReturnError(&error)
+            if let error = error {
+                print("❌ Failed to open Terminal: \(error)")
             }
         }
     }
