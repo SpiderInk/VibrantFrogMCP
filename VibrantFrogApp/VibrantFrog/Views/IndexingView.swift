@@ -120,13 +120,26 @@ struct PhotoIndexingView: View {
                             .font(.caption)
                             .foregroundStyle(.orange)
 
-                        Button("Retry Connection") {
-                            Task {
-                                await setupMCPConnection()
+                        Text("Start the server: cd ~/git/VibrantFrogMCP && python3 mcp_server_http.py")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+
+                        HStack(spacing: 8) {
+                            Button("Start MCP Server") {
+                                openTerminalWithMCPServer()
                             }
+                            .font(.caption)
+                            .buttonStyle(.borderless)
+
+                            Button("Retry Connection") {
+                                Task {
+                                    await setupMCPConnection()
+                                }
+                            }
+                            .font(.caption)
+                            .buttonStyle(.borderless)
                         }
-                        .font(.caption)
-                        .buttonStyle(.borderless)
                     }
                 }
             }
@@ -657,6 +670,43 @@ struct PhotoIndexingView: View {
             print("❌ Failed to read count")
             DispatchQueue.main.async {
                 self.indexedPhotosCount = 0
+            }
+        }
+    }
+
+    private func openTerminalWithMCPServer() {
+        // Open Terminal and start the MCP server
+        let command = """
+        cd ~/git/VibrantFrogMCP && \\
+        echo "======================================" && \\
+        echo "Starting VibrantFrogMCP HTTP Server" && \\
+        echo "======================================" && \\
+        echo "" && \\
+        echo "The MCP server will run on http://127.0.0.1:5050" && \\
+        echo "Leave this terminal window open while using VibrantFrogApp" && \\
+        echo "" && \\
+        python3 mcp_server_http.py
+        """
+
+        let appleScript = """
+        tell application "Terminal"
+            activate
+            do script "\(command)"
+        end tell
+        """
+
+        var error: NSDictionary?
+        if let scriptObject = NSAppleScript(source: appleScript) {
+            scriptObject.executeAndReturnError(&error)
+            if let error = error {
+                print("❌ Failed to open Terminal: \(error)")
+            } else {
+                // Wait a moment then retry connection
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                    Task {
+                        await self.setupMCPConnection()
+                    }
+                }
             }
         }
     }
