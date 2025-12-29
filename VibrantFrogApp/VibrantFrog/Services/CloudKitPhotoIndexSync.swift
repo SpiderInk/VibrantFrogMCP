@@ -2,7 +2,7 @@
 //  CloudKitPhotoIndexSync.swift
 //  VibrantFrog
 //
-//  Service for syncing photo index to CloudKit as individual records
+//  Service for syncing photo index database to CloudKit as a single file
 //
 
 import Foundation
@@ -16,8 +16,6 @@ class CloudKitPhotoIndexSync {
 
     private let container: CKContainer
     private let privateDatabase: CKDatabase
-    private let photoRecordType = "IndexedPhoto"
-    private let batchSize = 400 // CloudKit limit is 400 operations per batch
 
     var isCloudKitAvailable: Bool {
         FileManager.default.ubiquityIdentityToken != nil
@@ -349,75 +347,6 @@ class CloudKitPhotoIndexSync {
         }
 
         print("      Updated \(updatedCount) records, skipped \(skippedCount) without cloud_guid")
-    }
-
-    private func createRecord(from photo: PhotoRecord) -> CKRecord {
-        let recordID = CKRecord.ID(recordName: photo.uuid)
-        let record = CKRecord(recordType: photoRecordType, recordID: recordID)
-
-        record["uuid"] = photo.uuid
-        record["cloudGuid"] = photo.cloudGuid  // iCloud identifier for cross-device photo access
-        record["photoDescription"] = photo.description
-        record["embedding"] = photo.embedding
-        record["indexedAt"] = photo.indexedAt
-
-        // Add searchable tokens (lowercase words) for CloudKit array searching
-        // CloudKit doesn't support CONTAINS on strings, but does support CONTAINS on arrays
-        let tokens = photo.description
-            .lowercased()
-            .components(separatedBy: CharacterSet.alphanumerics.inverted)
-            .filter { $0.count > 2 } // Only words with 3+ characters
-        record["searchTokens"] = tokens
-
-        return record
-    }
-
-    // MARK: - Querying CloudKit
-
-    /// Search for photos in CloudKit by keyword
-    func searchPhotos(query: String, limit: Int = 20) async throws -> [CKRecord] {
-        guard isCloudKitAvailable else {
-            throw CloudKitSyncError.cloudKitNotAvailable
-        }
-
-        print("🔍 Searching CloudKit for: \(query)")
-
-        // Create predicate for description search
-        let predicate = NSPredicate(format: "photoDescription CONTAINS[cd] %@", query)
-        let queryOp = CKQuery(recordType: photoRecordType, predicate: predicate)
-        queryOp.sortDescriptors = [NSSortDescriptor(key: "indexedAt", ascending: false)]
-
-        // Perform query
-        let (results, _) = try await privateDatabase.records(matching: queryOp, resultsLimit: limit)
-
-        // Extract successful records
-        let records = results.compactMap { (_, result) -> CKRecord? in
-            switch result {
-            case .success(let record):
-                return record
-            case .failure:
-                return nil
-            }
-        }
-
-        print("   Found \(records.count) matching photos")
-        return records
-    }
-
-    /// Get total count of indexed photos in CloudKit
-    func getPhotoCount() async throws -> Int {
-        guard isCloudKitAvailable else {
-            return 0
-        }
-
-        let predicate = NSPredicate(value: true) // Match all
-        let query = CKQuery(recordType: photoRecordType, predicate: predicate)
-
-        let (results, _) = try await privateDatabase.records(matching: query, resultsLimit: 1)
-
-        // CloudKit doesn't provide count directly, so we'd need to fetch all or use a custom counter
-        // For now, return a placeholder
-        return results.count
     }
 
     // MARK: - Auto-Upload from Flag File
