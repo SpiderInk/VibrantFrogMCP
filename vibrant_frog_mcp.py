@@ -327,7 +327,6 @@ async def run_indexing_job_background(job_id: str):
         # Initialize shared SQLite index (instead of ChromaDB)
         from shared_index import SharedPhotoIndex
         shared_index = SharedPhotoIndex()
-        shared_index.initialize_db()
         logger.info(f"📊 SQLite database initialized at: {shared_index.db_path}")
 
         # Open Apple Photos Library
