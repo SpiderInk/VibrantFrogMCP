@@ -83,8 +83,9 @@ def reconcile():
                 print(f"   {i:2d}. {cloud} {date_str} - {photo.original_filename}")
 
         # Count how many are recent (last 7 days)
-        week_ago = datetime.now() - timedelta(days=7)
-        recent_missing = [p for p in missing_photos if p.date and p.date > week_ago]
+        from datetime import timezone
+        week_ago = datetime.now(timezone.utc) - timedelta(days=7)
+        recent_missing = [p for p in missing_photos if p.date and p.date.replace(tzinfo=timezone.utc) > week_ago]
         if recent_missing:
             print(f"\n   🔔 {len(recent_missing)} missing photos are from the last 7 days!")
             print(f"      This explains why recent photos don't appear in search.")
