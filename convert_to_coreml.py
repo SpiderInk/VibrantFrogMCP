@@ -16,11 +16,16 @@ def convert_sentence_transformer_to_coreml():
     """
     Convert the all-MiniLM-L6-v2 model to CoreML format
     """
+    # Force CPU to avoid MPS issues
+    import os
+    os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
+
     print("Loading sentence-transformers model...")
-    model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
+    model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2', device='cpu')
 
     # Get the underlying transformer model
     transformer = model[0].auto_model
+    transformer = transformer.cpu()  # Ensure it's on CPU
     tokenizer = model.tokenizer
 
     print("Model loaded successfully")
@@ -123,8 +128,9 @@ def convert_sentence_transformer_to_coreml():
     mlmodel.input_description["input_ids"] = "Tokenized input text (max 128 tokens)"
     mlmodel.input_description["attention_mask"] = "Attention mask for input tokens"
 
-    # Add output description
-    mlmodel.output_description["var_365"] = "384-dimensional sentence embedding vector"
+    # Add output description (get actual output name)
+    output_name = list(mlmodel.get_spec().description.output)[0].name
+    mlmodel.output_description[output_name] = "384-dimensional sentence embedding vector"
 
     # Save the model
     output_path = "SentenceEmbedding.mlpackage"
