@@ -7,6 +7,7 @@
 //
 
 import SwiftUI
+import SQLite3
 
 struct IndexingView: View {
     var body: some View {
@@ -712,10 +713,6 @@ struct PhotoIndexingView: View {
     }
 
     private func openTerminalWithIndexingScript() {
-        // Get the script path - assume it's in ~/git/VibrantFrogMCP/
-        let homeDir = FileManager.default.homeDirectoryForCurrentUser
-        let scriptPath = homeDir.appendingPathComponent("git/VibrantFrogMCP/index_photos_icloud.py")
-
         // Build the terminal command
         let command = """
         cd ~/git/VibrantFrogMCP && \\
