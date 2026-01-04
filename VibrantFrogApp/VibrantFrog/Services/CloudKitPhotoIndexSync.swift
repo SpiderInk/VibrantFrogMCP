@@ -24,9 +24,58 @@ class CloudKitPhotoIndexSync {
     private init() {
         container = CKContainer(identifier: "iCloud.com.vibrantfrog.AuthorAICollab")
         privateDatabase = container.privateCloudDatabase
+
+        // IMPORTANT: CloudKit environment is determined by build configuration:
+        // - Debug builds → Development environment
+        // - Release builds → Production environment
+        //
+        // To upload to Production, you MUST:
+        // 1. Build in Release mode (Product > Scheme > Edit Scheme > Run > Build Configuration = Release)
+        // 2. OR create an archive (Product > Archive) which uses Release by default
+        //
+        // There is NO API to override this - it's hardcoded based on build config.
+
+        #if DEBUG
+        print("⚠️ CloudKit: Using DEVELOPMENT environment (Debug build)")
+        #else
+        print("✅ CloudKit: Using PRODUCTION environment (Release build)")
+        #endif
     }
 
     // MARK: - Photo Index Sync
+
+    /// Test function to verify the record exists in CloudKit
+    func verifyPhotoIndexExists() async {
+        print("🔍 Verifying photoIndex record exists in CloudKit...")
+
+        #if DEBUG
+        print("   Environment: DEVELOPMENT")
+        #else
+        print("   Environment: PRODUCTION")
+        #endif
+
+        let recordID = CKRecord.ID(recordName: "photoIndex")
+
+        do {
+            let record = try await privateDatabase.record(for: recordID)
+            print("✅ Record EXISTS!")
+            print("   Record Type: \(record.recordType)")
+            print("   Zone: \(record.recordID.zoneID.zoneName)")
+            print("   Fields: \(record.allKeys())")
+
+            if let updatedAt = record["updatedAt"] as? Date {
+                print("   updatedAt: \(updatedAt)")
+            }
+            if let lastUpdated = record["lastUpdated"] as? Date {
+                print("   lastUpdated: \(lastUpdated)")
+            }
+            if let databaseSize = record["databaseSize"] as? Int {
+                print("   databaseSize: \(formatBytes(databaseSize))")
+            }
+        } catch {
+            print("❌ Record NOT FOUND: \(error.localizedDescription)")
+        }
+    }
 
     /// Enrich database with cloud identifiers (does NOT upload to CloudKit)
     func enrichDatabaseWithCloudGuids(databaseURL: URL) async throws {
@@ -86,7 +135,14 @@ class CloudKitPhotoIndexSync {
         }
 
         print("📤 Uploading database file to CloudKit as CKAsset...")
-        print("   Database: \(databaseURL.path)")
+        print("   Container: \(container.containerIdentifier ?? "unknown")")
+        print("   Database: Private")
+        #if DEBUG
+        print("   Environment: DEVELOPMENT (Debug build)")
+        #else
+        print("   Environment: PRODUCTION (Release build)")
+        #endif
+        print("   File: \(databaseURL.path)")
 
         // Get file size
         let attributes = try FileManager.default.attributesOfItem(atPath: databaseURL.path)
@@ -103,23 +159,41 @@ class CloudKitPhotoIndexSync {
             // Try to fetch existing record first
             let existingRecord = try await privateDatabase.record(for: recordID)
             existingRecord["database"] = asset
-            existingRecord["lastUpdated"] = Date()
+            existingRecord["updatedAt"] = Date()  // Match AuthorAICollab's expected field name
+            existingRecord["lastUpdated"] = Date()  // Keep for backward compatibility
             existingRecord["fileSize"] = fileSize
+            existingRecord["databaseSize"] = Int(fileSize)  // Match AuthorAICollab's expected field name
 
             let savedRecord = try await privateDatabase.save(existingRecord)
             print("✅ Updated existing database record in CloudKit")
             print("   Record ID: \(savedRecord.recordID.recordName)")
+            print("   Record Type: \(savedRecord.recordType)")
+            print("   Zone: \(savedRecord.recordID.zoneID.zoneName)")
+
+            // Verify account
+            let accountStatus = try await container.accountStatus()
+            print("   CloudKit Account Status: \(accountStatus.rawValue) (0=couldNotDetermine, 1=available, 2=restricted, 3=noAccount, 4=temporarilyUnavailable)")
 
         } catch let error as CKError where error.code == .unknownItem {
             // Record doesn't exist, create new one
-            let record = CKRecord(recordType: "PhotoIndexDatabase", recordID: recordID)
+            // Use "PhotoIndex" to match the existing schema in CloudKit Console
+            let record = CKRecord(recordType: "PhotoIndex", recordID: recordID)
             record["database"] = asset
-            record["lastUpdated"] = Date()
+            record["updatedAt"] = Date()  // Match AuthorAICollab's expected field name
+            record["lastUpdated"] = Date()  // Keep for backward compatibility
             record["fileSize"] = fileSize
+            record["databaseSize"] = Int(fileSize)  // Match AuthorAICollab's expected field name
+            // Don't set photoCount - field doesn't exist in Production schema
 
             let savedRecord = try await privateDatabase.save(record)
             print("✅ Created new database record in CloudKit")
             print("   Record ID: \(savedRecord.recordID.recordName)")
+            print("   Record Type: \(savedRecord.recordType)")
+            print("   Zone: \(savedRecord.recordID.zoneID.zoneName)")
+
+            // Verify account
+            let accountStatus = try await container.accountStatus()
+            print("   CloudKit Account Status: \(accountStatus.rawValue) (0=couldNotDetermine, 1=available, 2=restricted, 3=noAccount, 4=temporarilyUnavailable)")
 
         } catch {
             print("❌ Failed to upload database: \(error.localizedDescription)")

@@ -317,6 +317,17 @@ struct PhotoIndexingView: View {
                 .buttonStyle(.bordered)
                 .disabled(isSyncingToCloud || !cloudKitSync.isCloudKitAvailable)
 
+                Button {
+                    Task {
+                        await cloudKitSync.verifyPhotoIndexExists()
+                    }
+                } label: {
+                    Label("Verify Upload", systemImage: "checkmark.icloud")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .disabled(!cloudKitSync.isCloudKitAvailable)
+
                 Text("Adds cloud IDs and uploads database file")
                     .font(.caption2)
                     .foregroundStyle(.secondary)

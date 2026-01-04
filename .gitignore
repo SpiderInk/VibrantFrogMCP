@@ -64,6 +64,8 @@ indexed_photos.json
 photo_index/
 chroma_db/
 embeddings/
+*.db
+*.mlpackage/
 
 # IDE
 .vscode/
@@ -87,4 +89,5 @@ dist/
 
 # Internal documentation / planning (not for public release)
 docs/archive/
+scripts/archive/
 *.xcuserstate
