@@ -64,8 +64,14 @@ indexed_photos.json
 photo_index/
 chroma_db/
 embeddings/
-*.db
-*.mlpackage/
+
+# Photo index databases (specific paths, not wildcard)
+photo_index.db
+**/photo_index.db
+~/VibrantFrogPhotoIndex/*.db
+
+# CoreML models (generated, can be recreated)
+SentenceEmbedding.mlpackage/
 
 # IDE
 .vscode/
@@ -81,6 +87,11 @@ embeddings/
 # Build artifacts
 build/
 dist/
+
+# Release binaries (use GitHub Releases instead)
+release/*.dmg
+release/*.zip
+release/*.tar.gz
 
 # User data (uncomment if you don't want to commit user settings)
 # UserData/
