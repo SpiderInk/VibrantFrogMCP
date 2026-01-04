@@ -482,9 +482,9 @@ Once you confirm everything works:
    - iCloud sync working?
 
 2. **Ready for iOS Implementation:**
-   - I'll implement PhotoSearchService in VibrantFrog Collab
-   - It will read from the same iCloud database
-   - Search will work immediately on iOS/Mac
+   - CloudKit sync is implemented in VibrantFrogApp
+   - It reads from the same shared database via CloudKit
+   - Search works on both Mac and iOS/iPad devices
 
 3. **Future Enhancements:**
    - Convert model to CoreML (optional)

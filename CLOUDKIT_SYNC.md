@@ -77,7 +77,7 @@ trigger_sync()  # Creates flag file
 
 ### Mac App Integration
 
-The Mac app (`PhotoSearchService.swift`) checks for the flag file on launch:
+The Mac app (`CloudKitPhotoIndexSync.swift`) checks for the flag file on launch:
 
 ```swift
 private func checkForAutoUpload() async {

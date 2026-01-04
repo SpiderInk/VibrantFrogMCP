@@ -35,7 +35,7 @@ Now you have:
 
 **Then run:**
 ```bash
-cd /Users/tpiazza/git/VibrantFrogMCP
+cd VibrantFrogMCP
 python3 migrate_to_icloud.py
 ```
 
@@ -71,7 +71,7 @@ python3 migrate_to_icloud.py
 
 **Try this command:**
 ```bash
-cd /Users/tpiazza/git/VibrantFrogMCP
+cd VibrantFrogMCP
 python3 -c "
 from pathlib import Path
 import os
@@ -98,7 +98,7 @@ If this works, great! If not, use Option 1.
 Once the folder exists (via any method), run migration:
 
 ```bash
-cd /Users/tpiazza/git/VibrantFrogMCP
+cd VibrantFrogMCP
 python3 migrate_to_icloud.py
 ```
 
