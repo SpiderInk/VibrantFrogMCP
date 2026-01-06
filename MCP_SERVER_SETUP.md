@@ -230,10 +230,15 @@ Make sure to pull the model first: `ollama pull your-model-name`
 
 By default, the photo index is stored in:
 ```
-~/Library/Application Support/VibrantFrog/photo_index/
+~/Library/Application Support/VibrantFrogMCP/photo_index/
 ```
 
-To change this, edit `vibrant_frog_mcp.py` and update the `INDEX_DIR` variable.
+For the newer SQLite-based shared index, it's stored in:
+```
+~/VibrantFrogPhotoIndex/photo_index.db
+```
+
+To change this, edit `vibrant_frog_mcp.py` and update the `INDEX_DIR` variable (for ChromaDB) or modify `shared_index.py` for the SQLite path.
 
 ## Performance Tips
 

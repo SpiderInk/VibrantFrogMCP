@@ -118,33 +118,133 @@ def get_collection():
 # rich metadata, caching, etc.
 
 async def search_photos(query: str, n_results: int = 5) -> list:
-    """Search photos by natural language query"""
+    """Search photos by natural language query using semantic vector search"""
     start_time = time.time()
     logger.info(f"Searching for: '{query}' (max {n_results} results)")
 
-    # Get collection (lazy init)
-    coll = get_collection()
+    # Use SQLite database with semantic search
+    from shared_index import SharedPhotoIndex
+    import sqlite3
+    import json
+    import numpy as np
 
-    query_start = time.time()
-    results = coll.query(
-        query_texts=[query],
-        n_results=n_results
-    )
-    logger.info(f"Vector search completed in {time.time()-query_start:.2f}s")
+    shared_index = SharedPhotoIndex()
 
-    if not results['ids'][0]:
-        logger.info("No results found")
-        return []
+    try:
+        # Generate embedding for search query
+        logger.info("Generating query embedding...")
+        embed_start = time.time()
+        from sentence_transformers import SentenceTransformer
 
-    logger.info(f"Found {len(results['ids'][0])} results in {time.time()-start_time:.2f}s total")
+        # Use same model as indexing (all-MiniLM-L6-v2)
+        model = SentenceTransformer('all-MiniLM-L6-v2')
+        query_embedding = model.encode(query).tolist()
+        logger.info(f"Query embedding generated in {time.time()-embed_start:.2f}s")
 
-    return [{
-        'uuid': results['ids'][0][i],
-        'path': results['metadatas'][0][i].get('path', 'N/A'),
-        'filename': results['metadatas'][0][i].get('filename', 'Unknown'),
-        'description': results['documents'][0][i],
-        'distance': results['distances'][0][i]
-    } for i in range(len(results['ids'][0]))]
+        # Load all embeddings from database and compute cosine similarity
+        query_start = time.time()
+        conn = sqlite3.connect(shared_index.db_path)
+        cursor = conn.cursor()
+
+        # Fetch all photos with embeddings
+        cursor.execute("""
+            SELECT uuid, description, embedding, indexed_at
+            FROM photo_index
+            WHERE embedding IS NOT NULL
+        """)
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        logger.info(f"Loaded {len(rows)} photos with embeddings in {time.time()-query_start:.2f}s")
+
+        if not rows:
+            logger.info("No photos with embeddings found")
+            return []
+
+        # Calculate cosine similarity for each photo
+        similarities = []
+        query_vec = np.array(query_embedding)
+        query_norm = np.linalg.norm(query_vec)
+
+        for uuid, description, embedding_json, indexed_at in rows:
+            try:
+                # Parse embedding from JSON
+                embedding = json.loads(embedding_json)
+                photo_vec = np.array(embedding)
+
+                # Cosine similarity = dot(a,b) / (norm(a) * norm(b))
+                similarity = np.dot(query_vec, photo_vec) / (query_norm * np.linalg.norm(photo_vec))
+
+                similarities.append({
+                    'uuid': uuid,
+                    'description': description,
+                    'similarity': float(similarity),
+                    'distance': 1.0 - float(similarity)  # Convert to distance for compatibility
+                })
+            except Exception as e:
+                logger.warning(f"Failed to parse embedding for {uuid}: {e}")
+                continue
+
+        # Sort by similarity (highest first) and take top N
+        similarities.sort(key=lambda x: x['similarity'], reverse=True)
+        top_results = similarities[:n_results]
+
+        logger.info(f"Semantic search completed in {time.time()-start_time:.2f}s total")
+        logger.info(f"Top result similarity: {top_results[0]['similarity']:.4f}" if top_results else "No results")
+
+        # Get photo metadata from osxphotos for each result
+        import osxphotos
+        photosdb = osxphotos.PhotosDB()
+
+        results = []
+        for result in top_results:
+            # Try to get photo from library
+            photo = photosdb.get_photo(result['uuid'])
+            if photo:
+                results.append({
+                    'uuid': result['uuid'],
+                    'path': photo.path if photo.path else 'N/A',
+                    'filename': photo.original_filename,
+                    'description': result['description'],
+                    'distance': result['distance'],
+                    'similarity': result['similarity']
+                })
+            else:
+                # Photo not found in library, but still return description
+                results.append({
+                    'uuid': result['uuid'],
+                    'path': 'N/A',
+                    'filename': 'Unknown',
+                    'description': result['description'],
+                    'distance': result['distance'],
+                    'similarity': result['similarity']
+                })
+
+        return results
+
+    except Exception as e:
+        logger.error(f"Error in semantic search: {e}")
+        # Fallback to ChromaDB if semantic search fails
+        logger.warning("Falling back to ChromaDB search")
+        coll = get_collection()
+        query_start = time.time()
+        results = coll.query(
+            query_texts=[query],
+            n_results=n_results
+        )
+        logger.info(f"ChromaDB fallback search completed in {time.time()-query_start:.2f}s")
+
+        if not results['ids'][0]:
+            return []
+
+        return [{
+            'uuid': results['ids'][0][i],
+            'path': results['metadatas'][0][i].get('path', 'N/A'),
+            'filename': results['metadatas'][0][i].get('filename', 'Unknown'),
+            'description': results['documents'][0][i],
+            'distance': results['distances'][0][i]
+        } for i in range(len(results['ids'][0]))]
 
 async def get_photo(uuid: str) -> dict:
     """
@@ -213,6 +313,7 @@ async def get_photo(uuid: str) -> dict:
 async def run_indexing_job_background(job_id: str):
     """
     Background task to run Apple Photos Library indexing with progress tracking.
+    Writes to SQLite database for iCloud sync compatibility.
     This allows the MCP tool to return immediately while indexing continues.
     """
     job = indexing_jobs[job_id]
@@ -220,11 +321,13 @@ async def run_indexing_job_background(job_id: str):
     job.started_at = datetime.now()
 
     logger.info(f"🚀 Starting background Apple Photos indexing job {job_id}")
+    logger.info(f"📝 Writing to SQLite database for iCloud sync")
 
     try:
-        # Ensure ChromaDB collection is initialized
-        # This triggers lazy loading if not already done
-        get_collection()
+        # Initialize shared SQLite index (instead of ChromaDB)
+        from shared_index import SharedPhotoIndex
+        shared_index = SharedPhotoIndex()
+        logger.info(f"📊 SQLite database initialized at: {shared_index.db_path}")
 
         # Open Apple Photos Library
         logger.info("📷 Opening Apple Photos Library...")
@@ -262,7 +365,7 @@ async def run_indexing_job_background(job_id: str):
 
         job.total_photos = len(photos)
 
-        # Index each photo
+        # Index each photo to SQLite
         for i, photo in enumerate(photos):
             # Check for cancellation
             if job_cancel_flags.get(job_id, False):
@@ -279,8 +382,11 @@ async def run_indexing_job_background(job_id: str):
 
                 logger.info(f"[{i+1}/{job.total_photos}] Processing {photo.original_filename}")
 
-                # Index the photo using comprehensive Apple Photos indexing
-                uuid_result = await index_photo_with_metadata(photo)
+                # Import iCloud indexing function
+                from index_photos_icloud import index_photo_to_icloud
+
+                # Index the photo to SQLite
+                uuid_result = await index_photo_to_icloud(photo, shared_index)
 
                 if uuid_result:
                     job.indexed_uuids.append(uuid_result)
@@ -307,6 +413,9 @@ async def run_indexing_job_background(job_id: str):
         logger.info(f"✅ Job {job_id} completed: {job.processed_photos}/{job.total_photos} photos in {elapsed:.1f}s")
         logger.info(f"📊 Total indexed: {len(indexed_uuids)}")
 
+        # Create CloudKit sync flag
+        create_cloudkit_sync_flag(shared_index.db_path, len(indexed_uuids))
+
     except Exception as e:
         logger.error(f"❌ Job {job_id} failed: {e}")
         import traceback
@@ -314,6 +423,28 @@ async def run_indexing_job_background(job_id: str):
         job.status = "failed"
         job.error = str(e)
         job.completed_at = datetime.now()
+
+
+def create_cloudkit_sync_flag(db_path: str, photo_count: int):
+    """Create flag file to trigger CloudKit upload"""
+    import json
+    from pathlib import Path
+
+    db_path_obj = Path(db_path)
+    flag_path = db_path_obj.parent / ".needs-cloudkit-sync"
+
+    flag_data = {
+        "database_path": str(db_path_obj),
+        "database_size": db_path_obj.stat().st_size if db_path_obj.exists() else 0,
+        "timestamp": datetime.now().isoformat(),
+        "photo_count": photo_count
+    }
+
+    flag_path.write_text(json.dumps(flag_data, indent=2))
+    logger.info(f"✅ Created CloudKit sync flag: {flag_path}")
+    logger.info(f"   Database: {db_path}")
+    logger.info(f"   Size: {flag_data['database_size']:,} bytes")
+    logger.info(f"   Photos: {photo_count}")
 
 # Create MCP server
 app = Server("vibrant-frog-mcp", "Vibrant Frog MCP for Apple Photo Library Indexing and Search")

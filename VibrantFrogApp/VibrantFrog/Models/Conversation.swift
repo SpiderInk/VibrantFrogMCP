@@ -24,7 +24,7 @@ struct Conversation: Identifiable, Codable, Hashable {
         hasher.combine(id)
     }
 
-    init(id: UUID = UUID(), title: String = "New Conversation", messages: [ConversationMessage] = [], selectedModel: String = "llama3.2:latest", mcpServerIDs: [UUID] = []) {
+    init(id: UUID = UUID(), title: String = "New Conversation", messages: [ConversationMessage] = [], selectedModel: String = "mistral-nemo:latest", mcpServerIDs: [UUID] = []) {
         self.id = id
         self.title = title
         self.messages = messages

@@ -13,7 +13,7 @@ import Foundation
 class OllamaService: ObservableObject {
     @Published var isAvailable: Bool = false
     @Published var availableModels: [OllamaModel] = []
-    @Published var selectedModel: String = "llama3.2:latest" {
+    @Published var selectedModel: String = "mistral-nemo:latest" {
         didSet {
             print("⚡️ OllamaService.selectedModel CHANGED:")
             print("⚡️   Old value: \(oldValue)")
