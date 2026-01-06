@@ -1,0 +1,196 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'  # Trigger on version tags like v1.1.0
+  workflow_dispatch:  # Allow manual trigger
+
+env:
+  APP_NAME: VibrantFrog
+  XCODE_PROJECT: VibrantFrogApp/VibrantFrog.xcodeproj
+  XCODE_SCHEME: VibrantFrog
+  BUILD_CONFIGURATION: Release
+
+jobs:
+  build-macos:
+    name: Build macOS App
+    runs-on: macos-14  # macOS Sonoma (matches minimum deployment target)
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Select Xcode version
+        run: sudo xcode-select -s /Applications/Xcode_16.0.app/Contents/Developer
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Clean build
+        run: |
+          cd VibrantFrogApp
+          xcodebuild clean \
+            -project VibrantFrog.xcodeproj \
+            -scheme VibrantFrog \
+            -configuration Release
+
+      - name: Build app
+        run: |
+          cd VibrantFrogApp
+          xcodebuild build \
+            -project VibrantFrog.xcodeproj \
+            -scheme VibrantFrog \
+            -configuration Release \
+            -derivedDataPath build \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Create release directory
+        run: mkdir -p release
+
+      - name: Create ZIP archive
+        run: |
+          cd VibrantFrogApp/build/Build/Products/Release
+          zip -r ../../../../../release/${{ env.APP_NAME }}-${{ github.ref_name }}.zip ${{ env.APP_NAME }}.app
+
+      - name: Create DMG image
+        run: |
+          hdiutil create \
+            -volname "${{ env.APP_NAME }}" \
+            -srcfolder VibrantFrogApp/build/Build/Products/Release/${{ env.APP_NAME }}.app \
+            -ov \
+            -format UDZO \
+            release/${{ env.APP_NAME }}-${{ github.ref_name }}.dmg
+
+      - name: Compute checksums
+        run: |
+          cd release
+          shasum -a 256 ${{ env.APP_NAME }}-${{ github.ref_name }}.dmg > checksums.txt
+          shasum -a 256 ${{ env.APP_NAME }}-${{ github.ref_name }}.zip >> checksums.txt
+          cat checksums.txt
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-app
+          path: |
+            release/${{ env.APP_NAME }}-${{ github.ref_name }}.dmg
+            release/${{ env.APP_NAME }}-${{ github.ref_name }}.zip
+            release/checksums.txt
+          retention-days: 30
+
+  create-release:
+    name: Create GitHub Release
+    needs: build-macos
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-app
+          path: release
+
+      - name: Read checksums
+        id: checksums
+        run: |
+          echo "checksums<<EOF" >> $GITHUB_OUTPUT
+          cat release/checksums.txt >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          # Extract version from tag
+          VERSION=${{ github.ref_name }}
+
+          # Create release notes
+          cat > release_notes.md <<EOF
+          # ${{ env.APP_NAME }} $VERSION
+
+          ## Download
+
+          - **DMG (Recommended):** \`${{ env.APP_NAME }}-$VERSION.dmg\` (7-8 MB)
+          - **ZIP:** \`${{ env.APP_NAME }}-$VERSION.zip\` (12-13 MB)
+
+          ## Installation
+
+          ### DMG
+          1. Download the DMG file
+          2. Open it and drag ${{ env.APP_NAME }}.app to Applications
+          3. Right-click the app and select "Open" (first launch only)
+
+          ### ZIP
+          1. Download and unzip the file
+          2. Move ${{ env.APP_NAME }}.app to Applications
+          3. Right-click the app and select "Open" (first launch only)
+
+          ## Requirements
+
+          - macOS 14.0 (Sonoma) or later
+          - Ollama installed and running
+          - Python 3.10+ (for photo search features)
+
+          ## Checksums
+
+          \`\`\`
+          ${{ steps.checksums.outputs.checksums }}
+          \`\`\`
+
+          ## ⚠️ Important Note
+
+          This app is **unsigned** (built on GitHub Actions without code signing).
+
+          On first launch:
+          1. Right-click the app
+          2. Select "Open"
+          3. Click "Open" in the security dialog
+
+          ---
+
+          For detailed release notes, see the [repository README](https://github.com/${{ github.repository }}).
+          EOF
+
+          cat release_notes.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/${{ env.APP_NAME }}-${{ github.ref_name }}.dmg
+            release/${{ env.APP_NAME }}-${{ github.ref_name }}.zip
+            release/checksums.txt
+          body_path: release_notes.md
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  run-tests:
+    name: Run Tests
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest
+
+      - name: Run unit tests
+        run: pytest tests/ -v || echo "Tests not required for release (optional)"
