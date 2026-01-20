@@ -102,3 +102,4 @@ release/*.tar.gz
 docs/archive/
 scripts/archive/
 *.xcuserstate
+VibrantFrogApp/llama.xcframework/
