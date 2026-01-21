@@ -19,9 +19,6 @@
 		1A0000010000000000000009 /* IndexingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000020000000000000009 /* IndexingView.swift */; };
 		1A0000010000000000000010 /* Photo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000020000000000000010 /* Photo.swift */; };
 		1A0000010000000000000011 /* EmbeddingStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000020000000000000011 /* EmbeddingStore.swift */; };
-		1A0000010000000000000012 /* llama.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1A0000020000000000000012 /* llama.xcframework */; };
-		1A0000010000000000000013 /* llama.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 1A0000020000000000000012 /* llama.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
-		1A0000010000000000000016 /* LibLlama.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000020000000000000016 /* LibLlama.swift */; };
 		1A0000010000000000000017 /* MCPClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000020000000000000017 /* MCPClient.swift */; };
 		1A0000010000000000000018 /* MCPTestView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000020000000000000018 /* MCPTestView.swift */; };
 		1A0000010000000000000019 /* MCPClientHTTP.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000020000000000000019 /* MCPClientHTTP.swift */; };
@@ -47,7 +44,6 @@
 			dstPath = "";
 			dstSubfolderSpec = 10;
 			files = (
-				1A0000010000000000000013 /* llama.xcframework in Embed Frameworks */,
 			);
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -68,7 +64,6 @@
 		1A0000020000000000000009 /* IndexingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IndexingView.swift; sourceTree = "<group>"; };
 		1A0000020000000000000010 /* Photo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Photo.swift; sourceTree = "<group>"; };
 		1A0000020000000000000011 /* EmbeddingStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmbeddingStore.swift; sourceTree = "<group>"; };
-		1A0000020000000000000012 /* llama.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = llama.xcframework; sourceTree = SOURCE_ROOT; };
 		1A0000020000000000000014 /* VibrantFrog.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = VibrantFrog.entitlements; sourceTree = "<group>"; };
 		1A0000020000000000000015 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		1A0000020000000000000016 /* LibLlama.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibLlama.swift; sourceTree = "<group>"; };
@@ -95,7 +90,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				1A0000010000000000000012 /* llama.xcframework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -175,7 +169,6 @@
 		1A0000050000000000000006 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
-				1A0000020000000000000012 /* llama.xcframework */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -281,7 +274,6 @@
 				1A0000010000000000000009 /* IndexingView.swift in Sources */,
 				1A0000010000000000000010 /* Photo.swift in Sources */,
 				1A0000010000000000000011 /* EmbeddingStore.swift in Sources */,
-				1A0000010000000000000016 /* LibLlama.swift in Sources */,
 				1A0000010000000000000017 /* MCPClient.swift in Sources */,
 				719464E22ED92E0400F260DE /* Conversation.swift in Sources */,
 				718B3D402EE12DB800022C75 /* PromptTemplateStore.swift in Sources */,

@@ -87,7 +87,31 @@ VibrantFrog brings AI-powered conversations to your Mac with full support for MC
 
 ## Installation
 
-### 1. Install Ollama
+### 1. Download VibrantFrog
+
+Download the latest release from [GitHub Releases](https://github.com/SpiderInk/VibrantFrogMCP/releases):
+- **VibrantFrog-v1.0.0.dmg** (Recommended) - Drag to Applications
+- **VibrantFrog-v1.0.0.zip** - Extract and copy to Applications
+
+#### 🔒 First Launch Security Note
+
+VibrantFrog is code-signed but not yet notarized by Apple. On first launch, you'll need to:
+
+**Option 1: Right-click Method**
+1. Open Applications folder
+2. **Right-click** (or Control-click) on VibrantFrog.app
+3. Select "Open"
+4. Click "Open" in the security dialog
+5. Future launches work normally
+
+**Option 2: Terminal Command**
+```bash
+xattr -cr /Applications/VibrantFrog.app
+```
+
+This is a one-time security confirmation. VibrantFrog is 100% open source - you can inspect the code yourself!
+
+### 2. Install Ollama
 
 ```bash
 # Install Ollama
@@ -100,12 +124,14 @@ ollama serve
 ollama pull mistral-nemo:latest
 ```
 
-### 2. Clone and Build VibrantFrog
+### 3. Build from Source (Optional)
+
+If you prefer to build from source:
 
 ```bash
 # Clone the repository
-git clone https://github.com/SpiderInk/VibrantFrog.git
-cd VibrantFrog
+git clone https://github.com/SpiderInk/VibrantFrogMCP.git
+cd VibrantFrogMCP
 
 # Open in Xcode
 open VibrantFrogApp/VibrantFrog.xcodeproj

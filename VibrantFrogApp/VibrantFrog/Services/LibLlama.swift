@@ -1,5 +1,5 @@
 import Foundation
-import llama
+// import llama  // Commented out - using Ollama instead of embedded llama.cpp
 
 enum LlamaError: Error {
     case couldNotInitializeContext
