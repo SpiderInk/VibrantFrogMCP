@@ -14,16 +14,47 @@ import Photos
 class CloudKitPhotoIndexSync {
     static let shared = CloudKitPhotoIndexSync()
 
-    private let container: CKContainer
-    private let privateDatabase: CKDatabase
+    private let container: CKContainer?
+    private let privateDatabase: CKDatabase?
+    private let initializationError: Error?
 
     var isCloudKitAvailable: Bool {
-        FileManager.default.ubiquityIdentityToken != nil
+        guard container != nil else { return false }
+        return FileManager.default.ubiquityIdentityToken != nil
     }
 
     private init() {
-        container = CKContainer(identifier: "iCloud.com.vibrantfrog.AuthorAICollab")
-        privateDatabase = container.privateCloudDatabase
+        // Try to initialize CloudKit container, but don't crash if it fails
+        var tempContainer: CKContainer?
+        var tempDatabase: CKDatabase?
+        var tempError: Error?
+
+        do {
+            // Check if CloudKit is available before trying to initialize
+            guard FileManager.default.ubiquityIdentityToken != nil else {
+                throw CloudKitSyncError.cloudKitNotAvailable
+            }
+
+            let containerID = "iCloud.com.vibrantfrog.AuthorAICollab"
+            tempContainer = CKContainer(identifier: containerID)
+            tempDatabase = tempContainer?.privateCloudDatabase
+
+            #if DEBUG
+            print("⚠️ CloudKit: Using DEVELOPMENT environment (Debug build)")
+            #else
+            print("✅ CloudKit: Using PRODUCTION environment (Release build)")
+            #endif
+            print("✅ CloudKit initialized successfully")
+
+        } catch {
+            tempError = error
+            print("⚠️ CloudKit not available: \(error.localizedDescription)")
+            print("   Photo search will work locally without sync")
+        }
+
+        self.container = tempContainer
+        self.privateDatabase = tempDatabase
+        self.initializationError = tempError
 
         // IMPORTANT: CloudKit environment is determined by build configuration:
         // - Debug builds → Development environment
@@ -34,18 +65,17 @@ class CloudKitPhotoIndexSync {
         // 2. OR create an archive (Product > Archive) which uses Release by default
         //
         // There is NO API to override this - it's hardcoded based on build config.
-
-        #if DEBUG
-        print("⚠️ CloudKit: Using DEVELOPMENT environment (Debug build)")
-        #else
-        print("✅ CloudKit: Using PRODUCTION environment (Release build)")
-        #endif
     }
 
     // MARK: - Photo Index Sync
 
     /// Test function to verify the record exists in CloudKit
     func verifyPhotoIndexExists() async {
+        guard let privateDatabase = privateDatabase else {
+            print("⚠️ CloudKit not available")
+            return
+        }
+
         print("🔍 Verifying photoIndex record exists in CloudKit...")
 
         #if DEBUG
@@ -126,6 +156,10 @@ class CloudKitPhotoIndexSync {
 
     /// Upload the database file as a CKAsset for direct download on iOS
     func uploadDatabaseFile(databaseURL: URL) async throws {
+        guard let container = container, let privateDatabase = privateDatabase else {
+            throw CloudKitSyncError.cloudKitNotAvailable
+        }
+
         guard isCloudKitAvailable else {
             throw CloudKitSyncError.cloudKitNotAvailable
         }
